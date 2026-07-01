@@ -13,11 +13,22 @@ build/
 venv/
 env/
 
+
+# Data / output carpetas
+old/
+data/
+output/
+routes/
+
 # Data / output files
 *.csv
 *.CSV
 *.html
 *.gpx
+
+# Google Drive OAuth
+credentials.json
+token.json
 
 # macOS
 .DS_Store
