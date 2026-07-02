@@ -8,6 +8,64 @@ import pandas as pd
 from .config import MatchConfig
 
 
+def _absolute_range_mask(ts: pd.Series, config: MatchConfig) -> pd.Series:
+    """True where ts falls outside the configured plausible capture window."""
+    mask = pd.Series(False, index=ts.index)
+    if config.valid_timestamp_min is not None:
+        mask |= ts < pd.Timestamp(config.valid_timestamp_min, tz="UTC")
+    if config.valid_timestamp_max is not None:
+        mask |= ts > pd.Timestamp(config.valid_timestamp_max, tz="UTC")
+    return mask
+
+
+def _detect_timestamp_outliers(df: pd.DataFrame, config: MatchConfig) -> pd.Series:
+    """Boolean Series (index-aligned): True where the parsed timestamp is
+    inconsistent with the rest of the file's own recording, regardless of
+    whether it parsed successfully.
+
+    Runs three stages, each operating only on rows not already flagged:
+      0. Absolute plausible-capture-window bound (config.valid_timestamp_*).
+      1. Robust median/MAD range check, catching in-window anomalies (e.g. a
+         stale clock reading hours before the recording actually started)
+         without false-flagging the edges of a long-but-legitimate recording,
+         since the tolerance scales with the file's own spread.
+      2. Forward monotonicity pass in row order, catching subtler
+         out-of-order rows that survive the statistical checks.
+    """
+    flagged = pd.Series(False, index=df.index)
+    if not config.detect_timestamp_outliers:
+        return flagged
+
+    parsed = df["timestamp"].notna()
+
+    # Stage 0: absolute capture-window bound.
+    flagged.loc[parsed] = _absolute_range_mask(df.loc[parsed, "timestamp"], config)
+
+    candidate_idx = df.index[parsed & ~flagged]
+    if len(candidate_idx) < config.min_timestamps_for_sequentiality_check:
+        return flagged
+
+    # Stage 1: robust median/MAD range check among Stage-0 survivors.
+    ts = df.loc[candidate_idx, "timestamp"]
+    epoch_s = ts.astype("int64") / 1e9
+    median_s = np.median(epoch_s)
+    mad_s = np.median(np.abs(epoch_s - median_s))
+    tolerance_s = 1.4826 * mad_s * config.timestamp_outlier_mad_k
+    stage1_outlier = (epoch_s < median_s - tolerance_s) | (epoch_s > median_s + tolerance_s)
+    flagged.loc[ts.index[stage1_outlier.values]] = True
+
+    # Stage 2: forward monotonicity pass over remaining survivors, in row order.
+    running_max = None
+    for idx in df.index[parsed & ~flagged]:
+        t = df.at[idx, "timestamp"]
+        if running_max is not None and t < running_max:
+            flagged.at[idx] = True
+        else:
+            running_max = t
+
+    return flagged
+
+
 def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     """Standardise and validate a raw GPS DataFrame.
 
@@ -36,7 +94,13 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     df["lat_raw"] = df[config.lat_col]
 
     # --- Parse timestamp ---------------------------------------------------
-    df["timestamp"] = pd.to_datetime(df[config.timestamp_col], errors="coerce", utc=True)
+    df["timestamp"] = pd.to_datetime(
+        df[config.timestamp_col], errors="coerce", utc=True, format="mixed"
+    )
+
+    outlier_mask = _detect_timestamp_outliers(df, config)
+    df.loc[outlier_mask, "timestamp"] = pd.NaT
+
     df["timestamp_valid"] = df["timestamp"].notna()
 
     # --- Parse lon/lat -----------------------------------------------------
@@ -46,12 +110,15 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     # --- GPS validity -------------------------------------------------------
     lon_ok = df["lon"].notna()
     lat_ok = df["lat"].notna()
+    
 
     if config.treat_zero_zero_as_missing:
         zero_zero = (df["lon"] == 0.0) & (df["lat"] == 0.0)
         gps_valid = lon_ok & lat_ok & ~zero_zero
     else:
         gps_valid = lon_ok & lat_ok
+
+    
 
     df["gps_valid"] = gps_valid
     df["usable_for_hmm"] = df["timestamp_valid"] & df["gps_valid"]

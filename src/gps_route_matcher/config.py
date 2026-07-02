@@ -43,3 +43,10 @@ class MatchConfig:
 
     # ── Cleaning ────────────────────────────────────────────────────────────
     treat_zero_zero_as_missing: bool = True
+
+    # ── Timestamp sequentiality / outlier detection ──────────────────────────
+    detect_timestamp_outliers: bool = True
+    valid_timestamp_min: str | None = "2025-09-01"
+    valid_timestamp_max: str | None = "2026-08-01"
+    timestamp_outlier_mad_k: float = 3.0
+    min_timestamps_for_sequentiality_check: int = 5

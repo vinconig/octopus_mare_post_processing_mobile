@@ -1,5 +1,6 @@
 from gps_route_matcher.visualization import generate_interactive_map
 from gps_route_matcher.visualization import generate_initial_map
+from gps_route_matcher.visualization import generate_tracks
 from gps_route_matcher.pipeline import *
 import os
 import webbrowser
@@ -19,9 +20,10 @@ if __name__ == "__main__":
     )
 
 
-    df = match_gps_csv_to_route(gps_csv_path=gps_csv_path, route_path=route_path, output_csv_path=output_csv_path, config = cfg)
+    #df = match_gps_csv_to_route(gps_csv_path=gps_csv_path, route_path=route_path, output_csv_path=output_csv_path, config = cfg)
 
-    output_path = generate_interactive_map(df, output_path=os.path.join(PROJECT_ROOT, "output", "pm25_interactive.html"))
+    #output_path = generate_interactive_map(df, output_path=os.path.join(PROJECT_ROOT, "output", "pm25_interactive.html"))
+    output_path = generate_tracks(output_path=os.path.join(PROJECT_ROOT, "output", "tracks.html"))
     #output_path = generate_initial_map()
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
