@@ -18,7 +18,9 @@ from .paths import PROJECT_ROOT
 ROADNETWORK_DIR: Path = PROJECT_ROOT / "roadnetwork"
 
 
-def download_road_graph(polygon: Polygon, network_type: str = "all") -> nx.MultiDiGraph:
+def download_road_graph(
+    polygon: Polygon, network_type: str = "all", force_refresh: bool = False
+) -> nx.MultiDiGraph:
     """Fetch a directed road graph clipped to the polygon from the OSM API.
 
     Parameters
@@ -28,12 +30,21 @@ def download_road_graph(polygon: Polygon, network_type: str = "all") -> nx.Multi
     network_type:
         OSMnx network type. "all" includes footpaths/alleys, matching the
         walking/cycling-speed recordings in this project.
+    force_refresh:
+        Bypass osmnx's own on-disk Overpass response cache (separate from
+        this module's GraphML cache) so recent OSM edits are picked up.
 
     Returns
     -------
     Directed MultiDiGraph in WGS-84 with edge 'length' attributes in metres.
     """
-    return ox.graph_from_polygon(polygon, network_type=network_type, simplify=True)
+    prev_use_cache = ox.settings.use_cache
+    if force_refresh:
+        ox.settings.use_cache = False
+    try:
+        return ox.graph_from_polygon(polygon, network_type=network_type, simplify=True)
+    finally:
+        ox.settings.use_cache = prev_use_cache
 
 
 def save_road_graph(graph: nx.MultiDiGraph, path: str | Path) -> Path:
@@ -53,18 +64,24 @@ def get_road_graph(
     polygon: Polygon,
     network_type: str = "all",
     cache_path: str | Path | None = None,
+    force_refresh: bool = False,
 ) -> nx.MultiDiGraph:
     """Return the road graph for the polygon, using the on-disk cache if present.
 
     The default cache location is repopath/roadnetwork/bairro_<type>.graphml.
+
+    force_refresh:
+        Ignore both this GraphML cache and osmnx's own Overpass response
+        cache, forcing a fresh download from the OSM API. Use this after
+        editing OSM data (e.g. tagging a footway) that should now show up.
     """
     if cache_path is None:
         cache_path = ROADNETWORK_DIR / f"bairro_{network_type}.graphml"
     cache_path = Path(cache_path)
 
-    if cache_path.exists():
+    if cache_path.exists() and not force_refresh:
         return load_road_graph(cache_path)
 
-    graph = download_road_graph(polygon, network_type=network_type)
+    graph = download_road_graph(polygon, network_type=network_type, force_refresh=force_refresh)
     save_road_graph(graph, cache_path)
     return graph

@@ -6,24 +6,15 @@ import os
 import webbrowser
 from gps_route_matcher import MatchConfig, match_gps_csv_to_route
 from gps_route_matcher.paths import PROJECT_ROOT
+import download_gdrive_data
+import infer_route
+
 
 if __name__ == "__main__":
-    gps_csv_path=os.path.join(PROJECT_ROOT, "data", "OM2", "OM2test.CSV")
-    route_path=os.path.join(PROJECT_ROOT, "routes", "OM2_Route.gpx")
-    output_csv_path=os.path.join(PROJECT_ROOT, "output", "intermediate", "cleaned_df.csv")
+    
+    download_gdrive_data.download_om_folders()
+    infer_route.main()
+    
 
 
-    cfg = MatchConfig(
-        timestamp_col="Timestamp",
-        lon_col="Longitude",
-        lat_col="Latitude",
-    )
 
-
-    #df = match_gps_csv_to_route(gps_csv_path=gps_csv_path, route_path=route_path, output_csv_path=output_csv_path, config = cfg)
-
-    #output_path = generate_interactive_map(df, output_path=os.path.join(PROJECT_ROOT, "output", "pm25_interactive.html"))
-    output_path = generate_tracks(output_path=os.path.join(PROJECT_ROOT, "output", "tracks.html"))
-    #output_path = generate_initial_map()
-    print(f"Map saved to: {output_path}")
-    webbrowser.open(f"file://{output_path}")

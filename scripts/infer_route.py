@@ -31,60 +31,78 @@ from gps_route_matcher.route_inference import (
 from gps_route_matcher.visualization import _BAIRRO_KML_PATH, _load_all_tracks, generate_tracks_matched
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-trips", type=int, default=None,
-                        help="Only match the first N trips (for quick tests)")
-    parser.add_argument("--folders", nargs="+", default=None,
-                        help="Restrict to these data folders (e.g. OM_2). Each device "
-                             "tends to have its own route, so per-folder runs usually "
-                             "give a much cleaner result than the all-device default.")
-    parser.add_argument("--gamma", type=float, default=2.0,
-                        help="Frequency dominance in edge cost (default 2.0)")
-    parser.add_argument("--start", type=str, default=None, metavar="LAT,LON",
-                        help='Manual route start, e.g. --start "-22.8544,-43.2416". '
-                             "Skips start clustering; snapped to the nearest graph node.")
-    parser.add_argument("--end", type=str, default=None, metavar="LAT,LON",
-                        help="Manual route end (same format as --start)")
-    parser.add_argument("--via", type=str, default=None, metavar="LAT,LON",
-                        help="Force the path through this point (two Dijkstra legs); "
-                             "also what loop routes use automatically")
-    parser.add_argument("--no-browser", action="store_true",
-                        help="Don't open the visualization when done")
-    args = parser.parse_args()
+def _parse_latlon(s: str | None) -> tuple[float, float] | None:
+    if s is None:
+        return None
+    lat, lon = (float(p) for p in s.split(","))
+    return (lat, lon)
 
-    def parse_latlon(s: str | None) -> tuple[float, float] | None:
-        if s is None:
-            return None
-        lat, lon = (float(p) for p in s.split(","))
-        return (lat, lon)
+
+def infer_route(
+    folders: list[str] | None = None,
+    max_trips: int | None = None,
+    gamma: float = 2.0,
+    start: str | tuple[float, float] | None = None,
+    end: str | tuple[float, float] | None = None,
+    via: str | tuple[float, float] | None = None,
+    no_browser: bool = False,
+    force_refresh: bool = False,
+) -> None:
+    """Infer the ground-truth route for the bairro from recorded trips.
+
+    Parameters
+    ----------
+    folders:
+        Restrict to these data folders (e.g. ["OM_2"]). Each device tends to
+        have its own route, so per-folder runs usually give a much cleaner
+        result than the all-device default.
+    max_trips:
+        Only match the first N trips (for quick tests).
+    gamma:
+        Frequency dominance in edge cost.
+    start, end:
+        Manual route endpoints, either "LAT,LON" strings or (lat, lon)
+        tuples. Skips start/end clustering; snapped to the nearest graph
+        node.
+    via:
+        Force the path through this point (two Dijkstra legs); also what
+        loop routes use automatically.
+    no_browser:
+        Don't open the visualization when done.
+    force_refresh:
+        Bypass both the roadnetwork GraphML cache and osmnx's own Overpass
+        response cache, forcing a fresh OSM download (use after editing OSM
+        data).
+    """
+    def latlon(v: str | tuple[float, float] | None) -> tuple[float, float] | None:
+        return _parse_latlon(v) if isinstance(v, str) else v
 
     out_dir = PROJECT_ROOT / "output"
     inter_dir = out_dir / "intermediate"
     inter_dir.mkdir(parents=True, exist_ok=True)
     # Per-folder runs write to distinct files so they don't overwrite each other.
-    tag = "_".join(args.folders) if args.folders else "all"
+    tag = "_".join(folders) if folders else "all"
 
     match_cfg = MatchConfig()          # column names already default to the CSV schema
     infer_cfg = RouteInferenceConfig(
-        gamma=args.gamma,
-        start_latlon=parse_latlon(args.start),
-        end_latlon=parse_latlon(args.end),
-        via_latlon=parse_latlon(args.via),
+        gamma=gamma,
+        start_latlon=latlon(start),
+        end_latlon=latlon(end),
+        via_latlon=latlon(via),
     )
 
     print("1/6 Loading bairro polygon and road graph …")
     polygon = load_kml_polygon(str(_BAIRRO_KML_PATH)).union_all()
-    graph = get_road_graph(polygon, network_type="all")
+    graph = get_road_graph(polygon, network_type="all", force_refresh=force_refresh) #all as to include service roads, paths, etc. for better matching
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
-    print("2/6 Loading trips …")
+    print("2/6 Loading trips and preprocessing data …")
     tracks = _load_all_tracks(polygon)
-    if args.folders:
-        tracks = tracks[tracks["source_folder"].isin(args.folders)]
+    if folders:
+        tracks = tracks[tracks["source_folder"].isin(folders)]
     trip_ids = tracks["track_id"].unique()
-    if args.max_trips:
-        trip_ids = trip_ids[: args.max_trips]
+    if max_trips:
+        trip_ids = trip_ids[:max_trips]
         tracks = tracks[tracks["track_id"].isin(trip_ids)]
     print(f"    {len(trip_ids)} trips, {len(tracks)} points")
 
@@ -141,8 +159,46 @@ def main() -> None:
     )
     print(f"    visualization → {viz_path}")
 
-    if not args.no_browser:
+    if not no_browser:
         webbrowser.open(f"file://{viz_path}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--max-trips", type=int, default=None,
+                        help="Only match the first N trips (for quick tests)")
+    parser.add_argument("--folders", nargs="+", default=None,
+                        help="Restrict to these data folders (e.g. OM_2). Each device "
+                             "tends to have its own route, so per-folder runs usually "
+                             "give a much cleaner result than the all-device default.")
+    parser.add_argument("--gamma", type=float, default=2.0,
+                        help="Frequency dominance in edge cost (default 2.0)")
+    parser.add_argument("--start", type=str, default=None, metavar="LAT,LON",
+                        help='Manual route start, e.g. --start "-22.8544,-43.2416". '
+                             "Skips start clustering; snapped to the nearest graph node.")
+    parser.add_argument("--end", type=str, default=None, metavar="LAT,LON",
+                        help="Manual route end (same format as --start)")
+    parser.add_argument("--via", type=str, default=None, metavar="LAT,LON",
+                        help="Force the path through this point (two Dijkstra legs); "
+                             "also what loop routes use automatically")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Don't open the visualization when done")
+    parser.add_argument("--force-refresh", action="store_true",
+                        help="Bypass both the roadnetwork GraphML cache and osmnx's "
+                             "own Overpass response cache, forcing a fresh OSM download "
+                             "(use after editing OSM data)")
+    args = parser.parse_args()
+
+    infer_route(
+        folders=args.folders,
+        max_trips=args.max_trips,
+        gamma=args.gamma,
+        start=args.start,
+        end=args.end,
+        via=args.via,
+        no_browser=args.no_browser,
+        force_refresh=args.force_refresh,
+    )
 
 
 if __name__ == "__main__":
