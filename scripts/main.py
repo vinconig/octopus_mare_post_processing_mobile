@@ -12,8 +12,8 @@ import infer_route
 
 if __name__ == "__main__":
     
-    download_gdrive_data.download_om_folders()
-    infer_route.main()
+    #download_gdrive_data.download_om_folders(PROJECT_ROOT)
+    infer_route.infer_route(folders=["OM_1"], force_refresh=False)
     
 
 

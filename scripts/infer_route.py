@@ -111,7 +111,8 @@ def infer_route(
     results = match_all_trips(tracks, index, match_cfg)
     matched = [r for r in results if r.edge_sequence]
     print(f"    matched {len(matched)}/{len(results)} trips "
-          f"({sum(r.n_bridged_gaps for r in results)} gaps bridged)")
+          f"({sum(r.n_bridged_gaps for r in results)} gaps bridged, "
+          f"{sum(r.n_gaps_left_open for r in results)} left open)")
 
     # Persist per-trip edge sequences for diagnostics (trip identity kept).
     seq_path = inter_dir / f"trip_edge_sequences_{tag}.json"
