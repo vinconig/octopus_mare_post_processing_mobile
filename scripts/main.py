@@ -16,7 +16,7 @@ if __name__ == "__main__":
     
     #download_gdrive_data.download_om_folders(PROJECT_ROOT)
     folders = ["OM_1", "OM_2", "OM_3", "OM_4"]
-    for i, folder in enumerate(folders):
+    for i, folder in enumerate(folders): #refreshes the map once (for the first folder) to ensure the road graph is cached, then reuses it for the rest
         infer_route.infer_route(folders=[folder], force_refresh=(i == 0))
 
     map_matching.map_match(folders=folders, force_refresh=False)
