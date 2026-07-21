@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .config import MatchConfig
+from .route import Route1D, project_lonlat_to_route
 
 
 def _absolute_range_mask(ts: pd.Series, config: MatchConfig) -> pd.Series:
@@ -113,7 +114,6 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     # that survives .notna() but blows up the UTM projection downstream).
     lon_ok = df["lon"].notna() & df["lon"].between(-180.0, 180.0)
     lat_ok = df["lat"].notna() & df["lat"].between(-90.0, 90.0)
-    #here should also be the tracks logic where it checks whether its in polygon... maybe make polygon per track and then check against that and then set to 0 so theyre handled like later.
 
     if config.treat_zero_zero_as_missing:
         zero_zero = (df["lon"] == 0.0) & (df["lat"] == 0.0)
@@ -127,6 +127,42 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     df["usable_for_hmm"] = df["timestamp_valid"] & df["gps_valid"]
     df["timestamp_inferred"] = False
 
+    return df
+
+
+def set_oob_gps_to_invalid(
+    df: pd.DataFrame, config: MatchConfig, route: Route1D
+) -> pd.DataFrame:
+    """Flag GPS points that fall outside the route buffer as invalid.
+
+    Does NOT drop any rows. For every row where gps_valid is already True,
+    projects (lon, lat) onto `route` and clears gps_valid (and re-derives
+    usable_for_hmm) when the perpendicular distance to the route exceeds
+    config.oob_buffer_m [m] (default 50m). Rows already invalid (bad
+    timestamp aside) are left untouched.
+
+    Intended to run right after clean_gps_dataframe, passing the Route1D
+    built from the track's respective Inferred_Route_OM_*.gpx file.
+
+    Adds column:
+    distance_to_inferred_route_m : float – perpendicular distance from the
+                                    point to `route` [m]; NaN where
+                                    gps_valid was already False.
+    """
+    df = df.copy()
+
+    df["distance_to_inferred_route_m"] = np.nan
+
+    valid_idx = df.index[df["gps_valid"]]
+    for idx in valid_idx:
+        lon = df.at[idx, "lon"]
+        lat = df.at[idx, "lat"]
+        _, distance_m = project_lonlat_to_route(route, lon, lat)
+        df.at[idx, "distance_to_inferred_route_m"] = distance_m
+        if distance_m > config.oob_buffer_m:
+            df.at[idx, "gps_valid"] = False
+
+    df["usable_for_hmm"] = df["timestamp_valid"] & df["gps_valid"]
     return df
 
 

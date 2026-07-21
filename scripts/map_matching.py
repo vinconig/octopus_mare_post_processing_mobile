@@ -18,7 +18,7 @@ import pandas as pd
 import pyproj
 
 from gps_route_matcher.config import MatchConfig
-from gps_route_matcher.io import load_kml_polygon
+from gps_route_matcher.io import load_gpx_route, load_kml_polygon
 from gps_route_matcher.netmatch import (
     NetworkDistanceCache,
     build_graph_index,
@@ -26,6 +26,7 @@ from gps_route_matcher.netmatch import (
 )
 from gps_route_matcher.paths import PROJECT_ROOT
 from gps_route_matcher.roadnet import get_road_graph
+from gps_route_matcher.route import build_route_1d
 from gps_route_matcher.visualization import _BAIRRO_KML_PATH, _TRACK_FOLDERS
 
 
@@ -78,6 +79,9 @@ def map_match(
         out_dir = PROJECT_ROOT / "data" / f"{folder}_matched"
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        gpx_path = PROJECT_ROOT / "routes" / f"Inferred_Route_{folder}.gpx"
+        route = build_route_1d(load_gpx_route(str(gpx_path))) if gpx_path.is_file() else None
+
         csv_paths = _iter_csv_files(in_dir)
         if max_files is not None:
             csv_paths = csv_paths[:max_files]
@@ -95,6 +99,7 @@ def map_match(
 
             result = match_trip_to_network_rows(
                 trip_df, csv_path.stem, index, config, dist_cache, transformer_inv,
+                route=route,
             )
             result.to_csv(out_path, index=False)
 

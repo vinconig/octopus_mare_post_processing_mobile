@@ -26,12 +26,12 @@ class MatchConfig:
 
     # ── Timestamp inference ─────────────────────────────────────────────────
     expected_sample_interval_s: float | None = None
-    infer_missing_timestamps: bool = False
+    infer_missing_timestamps: bool = True
 
     # ── Gap / segment handling ──────────────────────────────────────────────
     max_bridge_gap_s: float = 90.0     # gaps ≤ this are bridged within one segment
     max_split_gap_s: float = 300.0     # gaps > this force a new HMM segment
-    max_speed_mps: float = 6.0         # ~22 km/h; used in transition penalty
+    max_speed_mps: float = 3.0         # ~10.8 km/h; used in transition penalty
 
     # ── Cross-segment gap bridging (network matcher only) ───────────────────
     # A gap between two HMM segments is only bridged with an inferred network
@@ -51,6 +51,8 @@ class MatchConfig:
 
     # ── Cleaning ────────────────────────────────────────────────────────────
     treat_zero_zero_as_missing: bool = True
+    check_oob: bool = False    # run set_oob_gps_to_invalid after clean_gps_dataframe
+    oob_buffer_m: float = 20.0  # max distance from the inferred route before gps_valid is cleared
 
     # ── Timestamp sequentiality / outlier detection ──────────────────────────
     detect_timestamp_outliers: bool = True

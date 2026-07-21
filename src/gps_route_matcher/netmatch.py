@@ -46,9 +46,10 @@ import pyproj
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString
 
-from .cleaning import clean_gps_dataframe, infer_missing_timestamps
+from .cleaning import clean_gps_dataframe, infer_missing_timestamps, set_oob_gps_to_invalid
 from .config import MatchConfig
 from .gaps import assign_match_segments, detect_gaps
+from .route import Route1D
 
 _LARGE_COST = 1e12
 
@@ -736,6 +737,7 @@ def match_trip_to_network_rows(
     config: MatchConfig,
     dist_cache: NetworkDistanceCache | None = None,
     transformer_inv: pyproj.Transformer | None = None,
+    route: Route1D | None = None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
     enriched dataframe — the network-matcher counterpart of
@@ -749,6 +751,11 @@ def match_trip_to_network_rows(
     forward along the actual matched road path between the two bracketing
     anchors (time-weighted, the network-path analogue of
     interpolation.interpolate_missing_s's arc-length interpolation).
+
+    If config.check_oob is True, `route` must be the Route1D for this trip's
+    respective inferred route (routes/Inferred_Route_OM_x.gpx); gps_valid is
+    then cleared for points beyond config.oob_buffer_m from that line before
+    matching (see cleaning.set_oob_gps_to_invalid).
 
     Returns all columns produced by clean_gps_dataframe /
     infer_missing_timestamps / detect_gaps / assign_match_segments, plus:
@@ -767,6 +774,8 @@ def match_trip_to_network_rows(
         )
 
     df = clean_gps_dataframe(trip_df, config)
+    if config.check_oob:
+        df = set_oob_gps_to_invalid(df, config, route)
     df = infer_missing_timestamps(df, config)
     df = df.sort_values("timestamp", kind="stable")  # trips must be time-ordered
     df = detect_gaps(df, config)
