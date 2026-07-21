@@ -42,6 +42,7 @@ def download_road_graph(
     if force_refresh:
         ox.settings.use_cache = False
     try:
+        ox.settings.timeout = 60  # seconds
         return ox.graph_from_polygon(polygon, network_type=network_type, simplify=True)
     finally:
         ox.settings.use_cache = prev_use_cache

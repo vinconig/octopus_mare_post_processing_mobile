@@ -108,9 +108,12 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     df["lat"] = pd.to_numeric(df[config.lat_col], errors="coerce")
 
     # --- GPS validity -------------------------------------------------------
-    lon_ok = df["lon"].notna()
-    lat_ok = df["lat"].notna()
-    
+    # Bounds also reject inf/-inf (sensor glitches occasionally emit lat/lon
+    # far outside the physically possible range, e.g. lat=161.8 — a value
+    # that survives .notna() but blows up the UTM projection downstream).
+    lon_ok = df["lon"].notna() & df["lon"].between(-180.0, 180.0)
+    lat_ok = df["lat"].notna() & df["lat"].between(-90.0, 90.0)
+    #here should also be the tracks logic where it checks whether its in polygon... maybe make polygon per track and then check against that and then set to 0 so theyre handled like later.
 
     if config.treat_zero_zero_as_missing:
         zero_zero = (df["lon"] == 0.0) & (df["lat"] == 0.0)

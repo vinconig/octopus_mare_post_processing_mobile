@@ -17,13 +17,13 @@ env/
 # Data / output carpetas
 data/
 output/
-routes/
+cache/
 
 # Data / output files
 *.csv
 *.CSV
 *.html
-*.gpx
+
 
 # Google Drive OAuth
 credentials.json

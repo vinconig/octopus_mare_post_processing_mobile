@@ -25,13 +25,19 @@ Gap handling:
     transition (real dt, no artificial 1-second steps). Across segments
     (dt > max_split_gap_s) trips are NOT dropped: the matched edge before and
     after the gap are bridged with a network shortest path, so partial
-    coverage still contributes evidence for every edge actually traversed.
+    coverage still contributes evidence for every edge actually traversed —
+    but only when both segments have at least
+    config.min_segment_points_to_bridge_gap matched points AND the network
+    distance being bridged is at most config.max_gap_bridge_m. Otherwise the
+    gap is left open (no inferred edges inserted) rather than guessing a long
+    stretch of unobserved road from too little evidence.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import networkx as nx
 import numpy as np
@@ -40,7 +46,7 @@ import pyproj
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString
 
-from .cleaning import clean_gps_dataframe
+from .cleaning import clean_gps_dataframe, infer_missing_timestamps
 from .config import MatchConfig
 from .gaps import assign_match_segments, detect_gaps
 
@@ -70,6 +76,7 @@ class GraphIndex:
     edge_lengths: np.ndarray             # metres, parallel to edge_keys
     kdtree: cKDTree
     sample_edge_idx: np.ndarray          # sample point i belongs to edge_keys[...]
+    edge_index_by_key: dict[EdgeKey, int] = field(default_factory=dict)  # reverse of edge_keys
 
     @property
     def n_edges(self) -> int:
@@ -121,6 +128,7 @@ def build_graph_index(
         edge_lengths=np.asarray(lengths),
         kdtree=cKDTree(np.asarray(sample_pts)),
         sample_edge_idx=np.asarray(sample_edge_idx, dtype=int),
+        edge_index_by_key={k: i for i, k in enumerate(edge_keys)},
     )
 
 
@@ -308,6 +316,7 @@ class TripMatchResult:
     n_segments: int
     n_bridged_gaps: int
     matched_length_m: float = 0.0         # total length of traversed edges
+    n_gaps_left_open: int = 0             # segment boundaries NOT bridged (too short/far)
 
 
 def _viterbi_segment(
@@ -361,6 +370,36 @@ def _viterbi_segment(
     return [all_cands[t][k] for t, k in enumerate(path)]
 
 
+def _network_gap_distance(
+    prev: EdgeCandidate,
+    curr: EdgeCandidate,
+    graph_proj: nx.MultiDiGraph,
+    edge_lengths: np.ndarray,
+) -> float:
+    """Network distance from prev's matched position to curr's, in metres.
+
+    Same geometry as NetworkDistanceCache.route_distance but uncached and
+    uncutoff: this only runs once per segment boundary (not inside Viterbi's
+    inner loop), and needs a definite answer — including "unreachable" — to
+    decide whether a cross-segment gap is short enough to bridge.
+    """
+    if prev.edge_idx == curr.edge_idx and curr.offset_m >= prev.offset_m:
+        return curr.offset_m - prev.offset_m
+
+    exit_node = prev.edge[1]
+    entry_node = curr.edge[0]
+    remaining = float(edge_lengths[prev.edge_idx]) - prev.offset_m
+
+    if exit_node == entry_node:
+        return remaining + curr.offset_m
+
+    try:
+        node_dist = nx.shortest_path_length(graph_proj, exit_node, entry_node, weight="length")
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return math.inf
+    return remaining + node_dist + curr.offset_m
+
+
 def _edges_between(
     prev: EdgeCandidate,
     curr: EdgeCandidate,
@@ -391,6 +430,109 @@ def _edges_between(
     return edges
 
 
+def _match_usable_segments(
+    df: pd.DataFrame,
+    index: GraphIndex,
+    config: MatchConfig,
+    dist_cache: NetworkDistanceCache,
+) -> list[tuple[int, list[EdgeCandidate]]]:
+    """Generate edge candidates for every usable row and run per-segment Viterbi.
+
+    `df` must already have gone through clean_gps_dataframe → detect_gaps →
+    assign_match_segments (usable_for_hmm, segment_id, original_index, lon,
+    lat, timestamp all present). Shared by match_trip_to_network and
+    match_trip_to_network_rows so the two never diverge.
+
+    Returns (segment_id, winning EdgeCandidate list) pairs, in
+    usable["segment_id"].unique() order, skipping segments that produced no
+    Viterbi path (e.g. no candidates found for any of their observations).
+    """
+    usable = df[df["usable_for_hmm"]]
+    if usable.empty:
+        return []
+
+    # Candidates for every usable observation
+    cands: dict[int, list[EdgeCandidate]] = {}
+    for _, row in usable.iterrows():
+        oi = int(row["original_index"])
+        cl = generate_edge_candidates(index, float(row["lon"]), float(row["lat"]), oi, config)
+        if cl:
+            cands[oi] = cl
+
+    # Viterbi per segment
+    segment_paths: list[tuple[int, list[EdgeCandidate]]] = []
+    for seg_id in usable["segment_id"].unique():
+        seg = usable[usable["segment_id"] == seg_id]
+        obs = []
+        for _, row in seg.iterrows():
+            oi = int(row["original_index"])
+            if oi in cands:
+                x, y = index.transformer_fwd.transform(float(row["lon"]), float(row["lat"]))
+                obs.append((oi, row["timestamp"], x, y))
+        path = _viterbi_segment(obs, cands, dist_cache, index, config)
+        if path:
+            segment_paths.append((int(seg_id), path))
+
+    return segment_paths
+
+
+@dataclass
+class _AnchorLink:
+    """How one matched anchor connects to the anchor immediately before it,
+    in trip-wide time order (flattened across all segments)."""
+
+    cand: EdgeCandidate
+    seg_idx: int                 # index into segment_paths
+    crossing_gap: bool           # True iff this is the first point of a segment > 0
+    gap_m: float | None          # network distance from the previous anchor; None for the first anchor overall
+    bridged: bool                # False only at a left-open segment boundary
+    bridge_edges: list[EdgeKey]  # edges from the previous anchor to this one; [] for the first anchor
+
+
+def _link_segment_paths(
+    segment_paths: list[list[EdgeCandidate]],
+    index: GraphIndex,
+    config: MatchConfig,
+) -> list[_AnchorLink]:
+    """Flatten segment_paths into one time-ordered list of _AnchorLink,
+    applying the min_segment_points_to_bridge_gap / max_gap_bridge_m
+    bridge-eligibility rule at every segment boundary.
+    """
+    links: list[_AnchorLink] = []
+    prev_cand: EdgeCandidate | None = None
+
+    for seg_idx, seg_path in enumerate(segment_paths):
+        for i, cand in enumerate(seg_path):
+            crossing_gap = i == 0 and seg_idx > 0
+
+            if prev_cand is None:
+                links.append(_AnchorLink(cand, seg_idx, False, None, True, []))
+            elif crossing_gap:
+                gap_m = _network_gap_distance(
+                    prev_cand, cand, index.graph_proj, index.edge_lengths
+                )
+                prev_seg_len = len(segment_paths[seg_idx - 1])
+                can_bridge = (
+                    prev_seg_len >= config.min_segment_points_to_bridge_gap
+                    and len(seg_path) >= config.min_segment_points_to_bridge_gap
+                    and gap_m <= config.max_gap_bridge_m
+                )
+                if can_bridge:
+                    bridge_edges = _edges_between(prev_cand, cand, index.graph_proj)
+                    links.append(_AnchorLink(cand, seg_idx, True, gap_m, True, bridge_edges))
+                else:
+                    links.append(_AnchorLink(cand, seg_idx, True, gap_m, False, []))
+            else:
+                gap_m = _network_gap_distance(
+                    prev_cand, cand, index.graph_proj, index.edge_lengths
+                )
+                bridge_edges = _edges_between(prev_cand, cand, index.graph_proj)
+                links.append(_AnchorLink(cand, seg_idx, False, gap_m, True, bridge_edges))
+            prev_cand = cand
+
+    return links
+
+
 def match_trip_to_network(
     trip_df: pd.DataFrame,
     trip_id: str,
@@ -413,55 +555,35 @@ def match_trip_to_network(
     df = detect_gaps(df, config)
     df = assign_match_segments(df, config)
 
-    usable = df[df["usable_for_hmm"]]
     n_total = len(df)
-    if usable.empty:
+    seg_pairs = _match_usable_segments(df, index, config, dist_cache)
+    if not seg_pairs:
         return TripMatchResult(trip_id, [], n_total, 0, 0, 0)
+    segment_paths = [path for _, path in seg_pairs]
 
-    # Candidates for every usable observation
-    cands: dict[int, list[EdgeCandidate]] = {}
-    for _, row in usable.iterrows():
-        oi = int(row["original_index"])
-        cl = generate_edge_candidates(index, float(row["lon"]), float(row["lat"]), oi, config)
-        if cl:
-            cands[oi] = cl
+    # Expand candidate sequences into edge sequences. Within a segment,
+    # consecutive candidates were already validated by Viterbi's transition
+    # cost, so they're always stitched together. Across a segment boundary
+    # (a real time gap), a network-path bridge is only inserted when both
+    # segments have enough support and the bridge itself is short — otherwise
+    # the gap is left open (a break in edge_seq) rather than inventing a long
+    # stretch of unobserved road.
+    links = _link_segment_paths(segment_paths, index, config)
 
-    # Viterbi per segment
-    segment_paths: list[list[EdgeCandidate]] = []
-    for seg_id in usable["segment_id"].unique():
-        seg = usable[usable["segment_id"] == seg_id]
-        obs = []
-        for _, row in seg.iterrows():
-            oi = int(row["original_index"])
-            if oi in cands:
-                x, y = index.transformer_fwd.transform(float(row["lon"]), float(row["lat"]))
-                obs.append((oi, row["timestamp"], x, y))
-        path = _viterbi_segment(obs, cands, dist_cache, index, config)
-        if path:
-            segment_paths.append(path)
-
-    if not segment_paths:
-        return TripMatchResult(trip_id, [], n_total, 0, 0, 0)
-
-    # Expand candidate sequences into edge sequences; bridge between segments
-    # via shortest path (gap bridging – partial trips still contribute).
     edge_seq: list[EdgeKey] = []
-    n_matched = 0
     n_bridged = 0
-    prev_cand: EdgeCandidate | None = None
-
-    for seg_path in segment_paths:
-        for cand in seg_path:
-            n_matched += 1
-            if prev_cand is None:
-                edge_seq.append(cand.edge)
-            else:
-                edge_seq.extend(_edges_between(prev_cand, cand, index.graph_proj))
-            prev_cand = cand
-        # Segment boundary: the next iteration's first candidate will be
-        # connected by _edges_between too — that IS the gap bridge.
-        if seg_path is not segment_paths[-1]:
-            n_bridged += 1
+    n_gaps_left_open = 0
+    for link in links:
+        if link.gap_m is None:
+            edge_seq.append(link.cand.edge)
+        elif link.bridged:
+            edge_seq.extend(link.bridge_edges)
+            if link.crossing_gap:
+                n_bridged += 1
+        else:
+            n_gaps_left_open += 1
+            edge_seq.append(link.cand.edge)  # fresh start, no bridge inserted
+    n_matched = len(links)
 
     # Deduplicate consecutive repeats (staying on the same edge across obs)
     deduped: list[EdgeKey] = []
@@ -484,6 +606,7 @@ def match_trip_to_network(
         n_segments=len(segment_paths),
         n_bridged_gaps=n_bridged,
         matched_length_m=matched_length,
+        n_gaps_left_open=n_gaps_left_open,
     )
 
 
@@ -511,3 +634,317 @@ def match_all_trips(
             print(f"  matched {i + 1}/{len(trip_ids)} trips")
 
     return results
+
+
+# ── Per-row output (network counterpart of pipeline.match_gps_to_route) ───────
+
+
+def _walk_forward(
+    start: EdgeCandidate,
+    bridge_edges: list[EdgeKey],
+    distance_m: float,
+    index: GraphIndex,
+) -> tuple[float, float, EdgeKey]:
+    """Metric (x, y) position + the EdgeKey it lands on, reached by walking
+    distance_m forward from start's matched position along start's own edge,
+    then along bridge_edges in order (the same path _edges_between produced
+    for this anchor pair — bridge_edges may be [] when start and the
+    destination anchor share an edge).
+
+    Clips to the end of the last edge if distance_m exceeds the path's total
+    length (defensive only — callers pass a target already bounded by the
+    pair's own gap_m).
+
+    A non-finite distance_m (nan/inf) is clamped to 0, i.e. the walk stays at
+    start's own position. This is the fallback for the rare case where two
+    Viterbi-chosen candidates are connected only via a cutoff-bounded search
+    (network_transition_cost caps an unreachable pair's cost at _LARGE_COST
+    rather than truly infinite, so Viterbi can still pick such a pair) but
+    the uncapped shortest path used for gap_m/path_m genuinely can't reach
+    curr from prev (disconnected component or one-way mismatch) — poisoning
+    path_m with inf/nan for that group.
+    """
+    if not math.isfinite(distance_m):
+        distance_m = 0.0
+    start_len = float(index.edge_lengths[start.edge_idx])
+    remaining_on_start = start_len - start.offset_m
+
+    if distance_m <= remaining_on_start or not bridge_edges:
+        offset = min(max(start.offset_m + distance_m, 0.0), start_len)
+        pt = index.edge_lines[start.edge_idx].interpolate(offset)
+        return float(pt.x), float(pt.y), start.edge
+
+    remaining = distance_m - remaining_on_start
+    for i, edge_key in enumerate(bridge_edges):
+        ei = index.edge_index_by_key[edge_key]
+        elen = float(index.edge_lengths[ei])
+        is_last = i == len(bridge_edges) - 1
+        if remaining <= elen or is_last:
+            offset = min(max(remaining, 0.0), elen)
+            pt = index.edge_lines[ei].interpolate(offset)
+            return float(pt.x), float(pt.y), edge_key
+        remaining -= elen
+
+    raise AssertionError("unreachable: bridge_edges is non-empty in this branch")
+
+
+def _anchor_path_positions(links: list[_AnchorLink]) -> tuple[np.ndarray, np.ndarray]:
+    """Return (group_id, path_m) int/float arrays, one entry per link (same order).
+
+    group_id increments by 1 at every link with bridged=False (a left-open
+    segment boundary) and is otherwise inherited from the previous anchor.
+    path_m accumulates link.gap_m and resets to 0.0 at each group boundary.
+    """
+    n = len(links)
+    group_id = np.zeros(n, dtype=int)
+    path_m = np.zeros(n, dtype=float)
+
+    for i in range(1, n):
+        if links[i].bridged:
+            group_id[i] = group_id[i - 1]
+            path_m[i] = path_m[i - 1] + (links[i].gap_m or 0.0)
+        else:
+            group_id[i] = group_id[i - 1] + 1
+            path_m[i] = 0.0
+
+    return group_id, path_m
+
+
+def _add_empty_network_match_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add NaN/unresolved match columns when there are no usable observations."""
+    df = df.copy()
+    n = len(df)
+    df["matched_lon"] = np.nan
+    df["matched_lat"] = np.nan
+    df["distance_to_route_m"] = np.nan
+    df["group_id"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["path_m"] = np.nan
+    df["matched_edge_u"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["matched_edge_v"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["matched_edge_key"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["interpolated"] = False
+    df["match_status"] = np.where(
+        df["timestamp_valid"], "unresolved_large_gap", "unresolved_missing_time"
+    )
+    return df
+
+
+def match_trip_to_network_rows(
+    trip_df: pd.DataFrame,
+    trip_id: str,
+    index: GraphIndex,
+    config: MatchConfig,
+    dist_cache: NetworkDistanceCache | None = None,
+    transformer_inv: pyproj.Transformer | None = None,
+) -> pd.DataFrame:
+    """Match one trip's GPS points to the road network and return a per-row
+    enriched dataframe — the network-matcher counterpart of
+    gps_route_matcher.pipeline.match_gps_to_route.
+
+    Reuses _match_usable_segments / _link_segment_paths, so the set of
+    traversed edges and bridge/leave-open decisions never diverges from
+    match_trip_to_network. Unlike match_trip_to_network, this always runs
+    infer_missing_timestamps and fills matched_lon/matched_lat for every row,
+    interpolating across gaps that couldn't be matched directly by walking
+    forward along the actual matched road path between the two bracketing
+    anchors (time-weighted, the network-path analogue of
+    interpolation.interpolate_missing_s's arc-length interpolation).
+
+    Returns all columns produced by clean_gps_dataframe /
+    infer_missing_timestamps / detect_gaps / assign_match_segments, plus:
+        matched_lon, matched_lat, distance_to_route_m, match_status,
+        interpolated, group_id, path_m,
+        matched_edge_u, matched_edge_v, matched_edge_key
+    match_status is one of "matched" | "interpolated" |
+    "unresolved_missing_time" | "unresolved_large_gap" — same vocabulary as
+    the single-track pipeline. Row order matches the input dataframe.
+    """
+    if dist_cache is None:
+        dist_cache = NetworkDistanceCache(index.graph_proj)
+    if transformer_inv is None:
+        transformer_inv = pyproj.Transformer.from_crs(
+            index.crs_metric, "EPSG:4326", always_xy=True
+        )
+
+    df = clean_gps_dataframe(trip_df, config)
+    df = infer_missing_timestamps(df, config)
+    df = df.sort_values("timestamp", kind="stable")  # trips must be time-ordered
+    df = detect_gaps(df, config)
+    df = assign_match_segments(df, config)
+
+    seg_pairs = _match_usable_segments(df, index, config, dist_cache)
+    if not seg_pairs:
+        df = _add_empty_network_match_columns(df)
+        return df.sort_values("original_index", kind="stable").reset_index(drop=True)
+
+    seg_ids = [sid for sid, _ in seg_pairs]
+    segment_paths = [path for _, path in seg_pairs]
+    links = _link_segment_paths(segment_paths, index, config)
+    group_arr, path_m_arr = _anchor_path_positions(links)
+
+    link_by_oi: dict[int, _AnchorLink] = {l.cand.obs_index: l for l in links}
+    group_by_oi = {l.cand.obs_index: int(g) for l, g in zip(links, group_arr)}
+    path_m_by_oi = {l.cand.obs_index: float(p) for l, p in zip(links, path_m_arr)}
+
+    # segment_id -> group_id, and group_id -> chronologically-ordered obs_index list
+    seg_id_to_group: dict[int, int] = {}
+    groups: dict[int, list[int]] = {}
+    for link, g in zip(links, group_arr):
+        seg_id = seg_ids[link.seg_idx]
+        seg_id_to_group.setdefault(seg_id, int(g))
+        groups.setdefault(int(g), []).append(link.cand.obs_index)
+
+    # ── Initialize output columns (mirrors pipeline._merge_hmm_result) ────
+    n = len(df)
+    df = df.copy()
+    df["matched_lon"] = np.nan
+    df["matched_lat"] = np.nan
+    df["distance_to_route_m"] = np.nan
+    df["match_status"] = pd.NA
+    df["interpolated"] = False
+    df["group_id"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["path_m"] = np.nan
+    df["matched_edge_u"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["matched_edge_v"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+    df["matched_edge_key"] = pd.Series([pd.NA] * n, index=df.index, dtype="Int64")
+
+    # ── Fill anchor (directly matched) rows ────────────────────────────────
+    anchor_mask = df["original_index"].isin(list(link_by_oi.keys()))
+    for idx in df.index[anchor_mask]:
+        oi = int(df.at[idx, "original_index"])
+        cand = link_by_oi[oi].cand
+        lon, lat = transformer_inv.transform(cand.x, cand.y)
+        df.at[idx, "matched_lon"] = lon
+        df.at[idx, "matched_lat"] = lat
+        df.at[idx, "distance_to_route_m"] = cand.distance_m
+        df.at[idx, "match_status"] = "matched"
+        df.at[idx, "group_id"] = group_by_oi[oi]
+        df.at[idx, "path_m"] = path_m_by_oi[oi]
+        df.at[idx, "matched_edge_u"] = cand.edge[0]
+        df.at[idx, "matched_edge_v"] = cand.edge[1]
+        df.at[idx, "matched_edge_key"] = cand.edge[2]
+
+    # ── Interpolate remaining rows, per group, in network path-distance
+    #    space (path_m) — the network analogue of
+    #    interpolation.interpolate_missing_s's arc-length interpolation ─────
+    df_ts = df.set_index("original_index")["timestamp"]
+    group_anchor_ns: dict[int, np.ndarray] = {}
+    group_anchor_path: dict[int, np.ndarray] = {}
+    group_anchor_oi: dict[int, np.ndarray] = {}
+    for g, oi_list in groups.items():
+        ns = np.array(
+            [int(pd.Timestamp(df_ts.loc[oi]).value) for oi in oi_list], dtype=np.int64
+        )
+        pm = np.array([path_m_by_oi[oi] for oi in oi_list], dtype=float)
+        order = np.argsort(ns)
+        group_anchor_ns[g] = ns[order]
+        group_anchor_path[g] = pm[order]
+        group_anchor_oi[g] = np.array(oi_list, dtype=int)[order]
+
+    for idx in df.index[~anchor_mask]:
+        if not df.at[idx, "timestamp_valid"]:
+            df.at[idx, "match_status"] = "unresolved_missing_time"
+            continue
+
+        seg_id = int(df.at[idx, "segment_id"])
+        g = seg_id_to_group.get(seg_id)
+        if g is None:
+            df.at[idx, "match_status"] = "unresolved_large_gap"
+            continue
+
+        anchor_ns = group_anchor_ns[g]
+        anchor_path = group_anchor_path[g]
+        anchor_oi_arr = group_anchor_oi[g]
+
+        row_ns = int(pd.Timestamp(df.at[idx, "timestamp"]).value)
+        before_mask = anchor_ns < row_ns
+        after_mask = anchor_ns > row_ns
+
+        if not before_mask.any() or not after_mask.any():
+            # Can't bracket – snap to nearest anchor if close enough in time
+            all_dts = np.abs((anchor_ns - row_ns) / 1e9)
+            nearest_i = int(np.argmin(all_dts))
+            if all_dts[nearest_i] > config.max_interpolation_gap_s:
+                df.at[idx, "match_status"] = "unresolved_large_gap"
+                continue
+            cand = link_by_oi[int(anchor_oi_arr[nearest_i])].cand
+            lon, lat = transformer_inv.transform(cand.x, cand.y)
+            df.at[idx, "matched_lon"] = lon
+            df.at[idx, "matched_lat"] = lat
+            df.at[idx, "group_id"] = g
+            df.at[idx, "path_m"] = anchor_path[nearest_i]
+            df.at[idx, "matched_edge_u"] = cand.edge[0]
+            df.at[idx, "matched_edge_v"] = cand.edge[1]
+            df.at[idx, "matched_edge_key"] = cand.edge[2]
+            df.at[idx, "interpolated"] = True
+            df.at[idx, "match_status"] = "interpolated"
+            continue
+
+        prev_ns = int(anchor_ns[before_mask].max())
+        next_ns = int(anchor_ns[after_mask].min())
+        dt_before = (row_ns - prev_ns) / 1e9
+        dt_after = (next_ns - row_ns) / 1e9
+        if (
+            dt_before > config.max_interpolation_gap_s
+            or dt_after > config.max_interpolation_gap_s
+        ):
+            df.at[idx, "match_status"] = "unresolved_large_gap"
+            continue
+
+        prev_pos = int(np.where(anchor_ns == prev_ns)[0][0])
+        next_pos = int(np.where(anchor_ns == next_ns)[0][0])
+        prev_oi = int(anchor_oi_arr[prev_pos])
+        next_oi = int(anchor_oi_arr[next_pos])
+        prev_path = float(anchor_path[prev_pos])
+        next_path = float(anchor_path[next_pos])
+        total_dt = (next_ns - prev_ns) / 1e9
+
+        target_extra_m = 0.0 if total_dt <= 0 else (dt_before / total_dt) * (next_path - prev_path)
+
+        prev_cand = link_by_oi[prev_oi].cand
+        next_link = link_by_oi[next_oi]  # bridge_edges: prev anchor -> this anchor
+        x, y, landed_edge = _walk_forward(prev_cand, next_link.bridge_edges, target_extra_m, index)
+        lon, lat = transformer_inv.transform(x, y)
+
+        df.at[idx, "matched_lon"] = lon
+        df.at[idx, "matched_lat"] = lat
+        df.at[idx, "group_id"] = g
+        df.at[idx, "path_m"] = prev_path + target_extra_m
+        df.at[idx, "matched_edge_u"] = landed_edge[0]
+        df.at[idx, "matched_edge_v"] = landed_edge[1]
+        df.at[idx, "matched_edge_key"] = landed_edge[2]
+        df.at[idx, "interpolated"] = True
+        df.at[idx, "match_status"] = "interpolated"
+
+    # Safety net: any row somehow still unset (shouldn't happen given the
+    # branches above are exhaustive, mirrors interpolate_missing_s's tail)
+    still_missing = df["match_status"].isna()
+    no_ts = still_missing & ~df["timestamp_valid"]
+    df.loc[no_ts, "match_status"] = "unresolved_missing_time"
+    df.loc[still_missing & ~no_ts, "match_status"] = "unresolved_large_gap"
+
+    return df.sort_values("original_index", kind="stable").reset_index(drop=True)
+
+
+def match_trip_csv_to_network(
+    csv_path: str | Path,
+    trip_id: str,
+    index: GraphIndex,
+    config: MatchConfig,
+    output_csv_path: str | Path | None = None,
+    dist_cache: NetworkDistanceCache | None = None,
+    transformer_inv: pyproj.Transformer | None = None,
+) -> pd.DataFrame:
+    """Load one trip CSV, match it to the road network, and optionally save
+    output. Thin I/O wrapper around match_trip_to_network_rows, mirroring
+    pipeline.match_gps_csv_to_route.
+    """
+    trip_df = pd.read_csv(csv_path)
+    result = match_trip_to_network_rows(
+        trip_df, trip_id, index, config, dist_cache, transformer_inv
+    )
+    if output_csv_path is not None:
+        out_path = Path(output_csv_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        result.to_csv(out_path, index=False)
+    return result

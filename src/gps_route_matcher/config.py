@@ -33,6 +33,14 @@ class MatchConfig:
     max_split_gap_s: float = 300.0     # gaps > this force a new HMM segment
     max_speed_mps: float = 6.0         # ~22 km/h; used in transition penalty
 
+    # ── Cross-segment gap bridging (network matcher only) ───────────────────
+    # A gap between two HMM segments is only bridged with an inferred network
+    # path when both segments have enough support and the bridge itself is
+    # short; otherwise the gap is left as a genuine break in the edge sequence
+    # rather than inventing a long stretch of unobserved road.
+    min_segment_points_to_bridge_gap: int = 2   # segments shorter than this never bridge
+    max_gap_bridge_m: float = 20.0              # bridges longer than this are left open
+
     # ── HMM transition model ────────────────────────────────────────────────
     allow_backward: bool = False
     backward_penalty: float = 1000.0
