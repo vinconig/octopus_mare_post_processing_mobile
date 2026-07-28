@@ -2,9 +2,17 @@
 
 import pandas as pd
 import pytest
+from shapely.geometry import Polygon
 
-from gps_route_matcher.cleaning import clean_gps_dataframe, infer_missing_timestamps
+from gps_route_matcher.cleaning import (
+    categorize_oob,
+    clean_gps_dataframe,
+    infer_missing_timestamps,
+    inspect_gps_oob,
+    inspect_gps_ootb,
+)
 from gps_route_matcher.config import MatchConfig
+from gps_route_matcher.route import build_route_1d
 
 
 def _make_df(rows):
@@ -182,3 +190,71 @@ def test_flagged_row_backfilled_by_infer_missing_timestamps():
     assert bool(inferred["timestamp_inferred"].iloc[5]) is True
     expected = pd.Timestamp("2026-03-09 12:00:25", tz="UTC")
     assert inferred["timestamp"].iloc[5] == expected
+
+
+# ── inspect_gps_oob / categorize_oob / inspect_gps_ootb ──────────────────────
+
+_ROUTE = build_route_1d([(-43.0, -22.0), (-43.0, -21.999)])  # short N-S line
+
+
+def test_inspect_gps_oob_flags_distance_without_touching_gps_valid():
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -22.0},      # on route
+        {"timestamp": "2026-01-01 00:00:05", "lon": -42.999, "lat": -22.0},    # ~111m off
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = inspect_gps_oob(cleaned, cfg, _ROUTE)
+
+    assert bool(out["out_of_bounds"].iloc[0]) is False
+    assert bool(out["out_of_bounds"].iloc[1]) is True
+    # gps_valid / usable_for_hmm are untouched by this step
+    assert out["gps_valid"].tolist() == cleaned["gps_valid"].tolist()
+    assert out["usable_for_hmm"].tolist() == cleaned["usable_for_hmm"].tolist()
+
+
+def test_categorize_oob_flags_inside_and_outside_polygon():
+    polygon = Polygon([(-43.01, -22.01), (-43.01, -21.99), (-42.99, -21.99), (-42.99, -22.01)])
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -22.0},   # inside
+        {"timestamp": "2026-01-01 00:00:05", "lon": -40.0, "lat": -22.0},   # outside
+    ])
+    cfg = MatchConfig()
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = categorize_oob(cleaned, polygon)
+
+    assert bool(out["gps_inside_polygon"].iloc[0]) is True
+    assert bool(out["gps_inside_polygon"].iloc[1]) is False
+
+
+def test_inspect_gps_ootb_marks_outside_core_window_and_recomputes_usable_for_hmm():
+    # Row 0: before arriving at the route (out_of_bounds). Rows 1-2: on the
+    # route (the core walk). Row 3: after leaving the route (out_of_bounds).
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -42.9, "lat": -22.0},   # far off route
+        {"timestamp": "2026-01-01 00:05:00", "lon": -43.0, "lat": -22.0},   # on route
+        {"timestamp": "2026-01-01 00:10:00", "lon": -43.0, "lat": -21.9995},  # on route
+        {"timestamp": "2026-01-01 00:15:00", "lon": -42.9, "lat": -22.0},   # far off route
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = inspect_gps_ootb(cleaned, cfg, _ROUTE)  # out_of_bounds not precomputed
+
+    assert "out_of_bounds" in out.columns
+    assert list(out["out_of_time_bounds"]) == [True, False, False, True]
+    assert list(out["usable_for_hmm"]) == [False, True, True, False]
+
+
+def test_inspect_gps_ootb_no_anchor_marks_everything_out_of_time_bounds():
+    # Every row is out_of_bounds, so no confirmed on-route fix exists to
+    # anchor a temporal window.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -42.9, "lat": -22.0},
+        {"timestamp": "2026-01-01 00:05:00", "lon": -42.9, "lat": -22.0},
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = inspect_gps_ootb(cleaned, cfg, _ROUTE)
+
+    assert out["out_of_time_bounds"].all()
+    assert not out["usable_for_hmm"].any()

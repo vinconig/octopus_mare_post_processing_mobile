@@ -306,7 +306,7 @@ def _row(inv, x, y, ts, lon=None, lat=None):
 
 
 def _base_config(**overrides):
-    return MatchConfig(detect_timestamp_outliers=False, **overrides)
+    return MatchConfig(detect_timestamp_outliers=False, check_oob=False, **overrides)
 
 
 def test_rows_interpolates_across_a_road_corner_not_a_straight_chord():

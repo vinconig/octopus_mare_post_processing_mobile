@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 
@@ -130,28 +131,34 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     return df
 
 
-def set_oob_gps_to_invalid(
+def inspect_gps_oob(
     df: pd.DataFrame, config: MatchConfig, route: Route1D
 ) -> pd.DataFrame:
-    """Flag GPS points that fall outside the route buffer as invalid.
+    """Flag GPS points that fall outside the route buffer.
 
-    Does NOT drop any rows. For every row where gps_valid is already True,
-    projects (lon, lat) onto `route` and clears gps_valid (and re-derives
-    usable_for_hmm) when the perpendicular distance to the route exceeds
-    config.oob_buffer_m [m] (default 50m). Rows already invalid (bad
-    timestamp aside) are left untouched.
+    Does NOT drop any rows and does NOT touch gps_valid / usable_for_hmm –
+    route-buffer distance is a separate concern from basic GPS validity, so
+    it's surfaced as its own column and left for downstream logic (see
+    inspect_gps_ootb) to combine as needed. For every row where gps_valid is
+    already True, projects (lon, lat) onto `route`; out_of_bounds is True
+    when the perpendicular distance to the route exceeds config.oob_buffer_m
+    [m] (default 20m). Rows where gps_valid is already False get
+    out_of_bounds = False (not evaluable) and NaN distance.
 
     Intended to run right after clean_gps_dataframe, passing the Route1D
     built from the track's respective Inferred_Route_OM_*.gpx file.
 
-    Adds column:
+    Adds columns:
     distance_to_inferred_route_m : float – perpendicular distance from the
                                     point to `route` [m]; NaN where
                                     gps_valid was already False.
+    out_of_bounds                : bool – distance_to_inferred_route_m
+                                    exceeds config.oob_buffer_m.
     """
     df = df.copy()
 
     df["distance_to_inferred_route_m"] = np.nan
+    df["out_of_bounds"] = False
 
     valid_idx = df.index[df["gps_valid"]]
     for idx in valid_idx:
@@ -159,10 +166,83 @@ def set_oob_gps_to_invalid(
         lat = df.at[idx, "lat"]
         _, distance_m = project_lonlat_to_route(route, lon, lat)
         df.at[idx, "distance_to_inferred_route_m"] = distance_m
-        if distance_m > config.oob_buffer_m:
-            df.at[idx, "gps_valid"] = False
+        df.at[idx, "out_of_bounds"] = distance_m > config.oob_buffer_m
 
-    df["usable_for_hmm"] = df["timestamp_valid"] & df["gps_valid"]
+    return df
+
+
+def categorize_oob(df: pd.DataFrame, polygon) -> pd.DataFrame:
+    """Flag whether each row's raw GPS point lies within `polygon`.
+
+    Pure spatial check, independent of gps_valid/out_of_bounds. Rows with
+    unparseable lon/lat get gps_inside_polygon = False.
+
+    Parameters
+    ----------
+    polygon :
+        A shapely geometry (e.g. the Bairro.kml boundary, loaded once via
+        io.load_kml_polygon(...).union_all() and reused across trips).
+
+    Adds column:
+    gps_inside_polygon : bool – (lon, lat) falls within `polygon`.
+    """
+    df = df.copy()
+
+    lon_ok = df["lon"].notna() & df["lat"].notna()
+    points = gpd.points_from_xy(df["lon"].fillna(0.0), df["lat"].fillna(0.0))
+    within = gpd.GeoSeries(points, crs="EPSG:4326").within(polygon).to_numpy()
+
+    df["gps_inside_polygon"] = lon_ok.to_numpy() & within
+    return df
+
+
+def inspect_gps_ootb(
+    df: pd.DataFrame, config: MatchConfig, route: Route1D
+) -> pd.DataFrame:
+    """Flag GPS points that fall outside the temporal window of the walk,
+    and derive the final usable_for_hmm.
+
+    Runs inspect_gps_oob first if out_of_bounds isn't present yet. The
+    temporal window is [first, last] timestamp among rows that are
+    gps_valid & timestamp_valid & ~out_of_bounds (i.e. confirmed on-route
+    fixes) – participants often had the sensor recording before reaching /
+    after leaving the mapped route, so the window is derived from the data
+    itself rather than assumed to be the full recording.
+
+    If no row ever qualifies as a confirmed on-route fix, every row is
+    marked out_of_time_bounds = True (no window can be established).
+
+    Does NOT drop any rows. Adds columns:
+    out_of_time_bounds : bool – True when the row's timestamp falls outside
+                          the derived window (or the timestamp itself is
+                          invalid). False for rows inside the window.
+    usable_for_hmm      : bool – recomputed as
+                          gps_valid & timestamp_valid & ~out_of_bounds &
+                          ~out_of_time_bounds. This is the final,
+                          authoritative value (overwrites the simpler
+                          version set by clean_gps_dataframe /
+                          infer_missing_timestamps).
+    """
+    if "out_of_bounds" not in df.columns:
+        df = inspect_gps_oob(df, config, route)
+
+    df = df.copy()
+
+    anchor_mask = df["gps_valid"] & df["timestamp_valid"] & ~df["out_of_bounds"]
+    if anchor_mask.any():
+        t_min = df.loc[anchor_mask, "timestamp"].min()
+        t_max = df.loc[anchor_mask, "timestamp"].max()
+        in_window = df["timestamp_valid"] & df["timestamp"].between(t_min, t_max)
+        df["out_of_time_bounds"] = ~in_window
+    else:
+        df["out_of_time_bounds"] = True
+
+    df["usable_for_hmm"] = (
+        df["gps_valid"]
+        & df["timestamp_valid"]
+        & ~df["out_of_bounds"]
+        & ~df["out_of_time_bounds"]
+    )
     return df
 
 

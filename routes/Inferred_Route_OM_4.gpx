@@ -3,6 +3,12 @@
   <trk>
     <name>Inferred route (OM_4)</name>
     <trkseg>
+      <trkpt lat="-22.8718086" lon="-43.2364787">
+      </trkpt>
+      <trkpt lat="-22.8714844" lon="-43.2363302">
+      </trkpt>
+      <trkpt lat="-22.8714512" lon="-43.2364145">
+      </trkpt>
       <trkpt lat="-22.8717759" lon="-43.2365631">
       </trkpt>
       <trkpt lat="-22.8720294" lon="-43.2366789">
@@ -109,7 +115,45 @@
       </trkpt>
       <trkpt lat="-22.8655311" lon="-43.2366459">
       </trkpt>
-      <trkpt lat="-22.8658099" lon="-43.2364323">
+      <trkpt lat="-22.8654598" lon="-43.2367005">
+      </trkpt>
+      <trkpt lat="-22.8654166" lon="-43.2366266">
+      </trkpt>
+      <trkpt lat="-22.8654017" lon="-43.2365574">
+      </trkpt>
+      <trkpt lat="-22.865409" lon="-43.2364928">
+      </trkpt>
+      <trkpt lat="-22.8654343" lon="-43.236385">
+      </trkpt>
+      <trkpt lat="-22.8654692" lon="-43.2362959">
+      </trkpt>
+      <trkpt lat="-22.865523" lon="-43.2362115">
+      </trkpt>
+      <trkpt lat="-22.8655809" lon="-43.2361444">
+      </trkpt>
+      <trkpt lat="-22.8656247" lon="-43.2360404">
+      </trkpt>
+      <trkpt lat="-22.8656274" lon="-43.2359813">
+      </trkpt>
+      <trkpt lat="-22.865594" lon="-43.235935">
+      </trkpt>
+      <trkpt lat="-22.8655238" lon="-43.2359172">
+      </trkpt>
+      <trkpt lat="-22.8654387" lon="-43.23589">
+      </trkpt>
+      <trkpt lat="-22.8653677" lon="-43.2358603">
+      </trkpt>
+      <trkpt lat="-22.8652928" lon="-43.2358175">
+      </trkpt>
+      <trkpt lat="-22.8652504" lon="-43.2357645">
+      </trkpt>
+      <trkpt lat="-22.8652117" lon="-43.2356933">
+      </trkpt>
+      <trkpt lat="-22.8651757" lon="-43.2356155">
+      </trkpt>
+      <trkpt lat="-22.865145" lon="-43.2355345">
+      </trkpt>
+      <trkpt lat="-22.8651286" lon="-43.2354609">
       </trkpt>
     </trkseg>
   </trk>

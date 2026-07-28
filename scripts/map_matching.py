@@ -99,7 +99,7 @@ def map_match(
 
             result = match_trip_to_network_rows(
                 trip_df, csv_path.stem, index, config, dist_cache, transformer_inv,
-                route=route,
+                route=route, polygon=polygon,
             )
             result.to_csv(out_path, index=False)
 

@@ -3,6 +3,8 @@
   <trk>
     <name>Inferred route (OM_1)</name>
     <trkseg>
+      <trkpt lat="-22.8400126" lon="-43.2521025">
+      </trkpt>
       <trkpt lat="-22.840078" lon="-43.2520439">
       </trkpt>
       <trkpt lat="-22.840227" lon="-43.2519102">
@@ -113,23 +115,43 @@
       </trkpt>
       <trkpt lat="-22.841671" lon="-43.2463135">
       </trkpt>
-      <trkpt lat="-22.8417904" lon="-43.2462896">
+      <trkpt lat="-22.8415862" lon="-43.2462315">
       </trkpt>
-      <trkpt lat="-22.8419616" lon="-43.2462707">
+      <trkpt lat="-22.8415239" lon="-43.2461804">
       </trkpt>
-      <trkpt lat="-22.8420842" lon="-43.2462335">
+      <trkpt lat="-22.841422" lon="-43.2461243">
       </trkpt>
-      <trkpt lat="-22.8422131" lon="-43.2461936">
+      <trkpt lat="-22.8413222" lon="-43.2460658">
       </trkpt>
-      <trkpt lat="-22.8422854" lon="-43.2461748">
+      <trkpt lat="-22.8412352" lon="-43.2460105">
       </trkpt>
-      <trkpt lat="-22.8423693" lon="-43.2461735">
+      <trkpt lat="-22.8412234" lon="-43.246003">
       </trkpt>
-      <trkpt lat="-22.8423215" lon="-43.2464048">
+      <trkpt lat="-22.841108" lon="-43.2459452">
       </trkpt>
-      <trkpt lat="-22.8423674" lon="-43.2464183">
+      <trkpt lat="-22.8410639" lon="-43.2459077">
       </trkpt>
-      <trkpt lat="-22.8423168" lon="-43.2465999">
+      <trkpt lat="-22.8410223" lon="-43.2458657">
+      </trkpt>
+      <trkpt lat="-22.8409985" lon="-43.245847">
+      </trkpt>
+      <trkpt lat="-22.8409765" lon="-43.2458356">
+      </trkpt>
+      <trkpt lat="-22.8409527" lon="-43.2458312">
+      </trkpt>
+      <trkpt lat="-22.8409252" lon="-43.2458336">
+      </trkpt>
+      <trkpt lat="-22.8408961" lon="-43.2458406">
+      </trkpt>
+      <trkpt lat="-22.840856" lon="-43.245857">
+      </trkpt>
+      <trkpt lat="-22.840828" lon="-43.2458731">
+      </trkpt>
+      <trkpt lat="-22.8408082" lon="-43.2458903">
+      </trkpt>
+      <trkpt lat="-22.8407985" lon="-43.2459107">
+      </trkpt>
+      <trkpt lat="-22.8407948" lon="-43.2459217">
       </trkpt>
     </trkseg>
   </trk>

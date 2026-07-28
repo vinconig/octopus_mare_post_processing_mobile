@@ -51,8 +51,8 @@ class MatchConfig:
 
     # ── Cleaning ────────────────────────────────────────────────────────────
     treat_zero_zero_as_missing: bool = True
-    check_oob: bool = False    # run set_oob_gps_to_invalid after clean_gps_dataframe
-    oob_buffer_m: float = 20.0  # max distance from the inferred route before gps_valid is cleared
+    check_oob: bool = True    # run inspect_gps_oob (+ categorize_oob/inspect_gps_ootb if polygon given)
+    oob_buffer_m: float = 25.0  # max distance from the inferred route before out_of_bounds is set
 
     # ── Timestamp sequentiality / outlier detection ──────────────────────────
     detect_timestamp_outliers: bool = True

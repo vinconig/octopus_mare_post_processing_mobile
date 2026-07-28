@@ -46,7 +46,13 @@ import pyproj
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString
 
-from .cleaning import clean_gps_dataframe, infer_missing_timestamps, set_oob_gps_to_invalid
+from .cleaning import (
+    categorize_oob,
+    clean_gps_dataframe,
+    infer_missing_timestamps,
+    inspect_gps_oob,
+    inspect_gps_ootb,
+)
 from .config import MatchConfig
 from .gaps import assign_match_segments, detect_gaps
 from .route import Route1D
@@ -738,6 +744,7 @@ def match_trip_to_network_rows(
     dist_cache: NetworkDistanceCache | None = None,
     transformer_inv: pyproj.Transformer | None = None,
     route: Route1D | None = None,
+    polygon=None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
     enriched dataframe — the network-matcher counterpart of
@@ -753,9 +760,13 @@ def match_trip_to_network_rows(
     interpolation.interpolate_missing_s's arc-length interpolation).
 
     If config.check_oob is True, `route` must be the Route1D for this trip's
-    respective inferred route (routes/Inferred_Route_OM_x.gpx); gps_valid is
-    then cleared for points beyond config.oob_buffer_m from that line before
-    matching (see cleaning.set_oob_gps_to_invalid).
+    respective inferred route (routes/Inferred_Route_OM_x.gpx); points
+    beyond config.oob_buffer_m from that line get out_of_bounds = True (see
+    cleaning.inspect_gps_oob) — gps_valid itself is left untouched. If
+    `polygon` is also given (e.g. the Bairro.kml boundary), gps_inside_polygon
+    and out_of_time_bounds are derived too (cleaning.categorize_oob /
+    inspect_gps_ootb), and usable_for_hmm is finalized as
+    gps_valid & timestamp_valid & ~out_of_bounds & ~out_of_time_bounds.
 
     Returns all columns produced by clean_gps_dataframe /
     infer_missing_timestamps / detect_gaps / assign_match_segments, plus:
@@ -775,8 +786,11 @@ def match_trip_to_network_rows(
 
     df = clean_gps_dataframe(trip_df, config)
     if config.check_oob:
-        df = set_oob_gps_to_invalid(df, config, route)
+        df = inspect_gps_oob(df, config, route)
     df = infer_missing_timestamps(df, config)
+    if config.check_oob and polygon is not None:
+        df = categorize_oob(df, polygon)
+        df = inspect_gps_ootb(df, config, route)
     df = df.sort_values("timestamp", kind="stable")  # trips must be time-ordered
     df = detect_gaps(df, config)
     df = assign_match_segments(df, config)
@@ -943,6 +957,8 @@ def match_trip_csv_to_network(
     output_csv_path: str | Path | None = None,
     dist_cache: NetworkDistanceCache | None = None,
     transformer_inv: pyproj.Transformer | None = None,
+    route: Route1D | None = None,
+    polygon=None,
 ) -> pd.DataFrame:
     """Load one trip CSV, match it to the road network, and optionally save
     output. Thin I/O wrapper around match_trip_to_network_rows, mirroring
@@ -950,7 +966,8 @@ def match_trip_csv_to_network(
     """
     trip_df = pd.read_csv(csv_path)
     result = match_trip_to_network_rows(
-        trip_df, trip_id, index, config, dist_cache, transformer_inv
+        trip_df, trip_id, index, config, dist_cache, transformer_inv,
+        route=route, polygon=polygon,
     )
     if output_csv_path is not None:
         out_path = Path(output_csv_path)
