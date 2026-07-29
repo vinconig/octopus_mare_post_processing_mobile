@@ -14,7 +14,7 @@ import generate_map_info
 
 
 if __name__ == "__main__":
-    # #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
+    #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
     # download_gdrive_data.download_om_folders(PROJECT_ROOT)
     # folders = ["OM_1", "OM_2", "OM_3", "OM_4"]
     # # Manual route endpoints per folder ("LAT,LON" or (lat, lon)); leave a folder
@@ -33,9 +33,15 @@ if __name__ == "__main__":
 
     # map_matching.map_match(folders=folders, force_refresh=False, overwrite=True)
 
-    generate_map_info.generate_map_info()
+    # generate_map_info.generate_map_info()
 
-    output_path = generate_interactive_map_all_data(os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data.html"))
+    # output_path = generate_interactive_map_all_data(os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data.html"))
+    # print(f"Map saved to: {output_path}")
+    # webbrowser.open(f"file://{output_path}")
+
+
+    from gps_route_matcher.visualization import generate_hmm_debug_map
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 

@@ -217,6 +217,39 @@ def generate_edge_candidates(
     return out
 
 
+@dataclass
+class CandidateTraceRow:
+    """One (observation, candidate) row of Viterbi debug trace.
+
+    Populated only when a trace_sink list is passed into
+    match_trip_to_network_rows / _match_usable_segments / _viterbi_segment;
+    costs nothing for callers that don't pass one. transition_cost and the
+    pred_* fields are None for the first candidate of a segment (no
+    predecessor exists yet). cumulative_cost is the DP cost to reach this
+    candidate (the same quantity as _viterbi_segment's `costs` array).
+    is_on_winning_path is set True, after backtracking, for exactly the
+    candidates Viterbi actually selected. lon/lat are filled in bulk by
+    match_trip_to_network_rows (from x/y) once the DP work is done.
+    """
+
+    obs_index: int
+    segment_id: int
+    candidate_idx: int
+    edge: EdgeKey
+    offset_m: float
+    distance_m: float
+    emission_cost: float
+    x: float
+    y: float
+    pred_obs_index: int | None
+    pred_candidate_idx: int | None
+    transition_cost: float | None
+    cumulative_cost: float
+    is_on_winning_path: bool = False
+    lon: float | None = None
+    lat: float | None = None
+
+
 # ── Network distances ─────────────────────────────────────────────────────────
 
 
@@ -332,8 +365,17 @@ def _viterbi_segment(
     dist_cache: NetworkDistanceCache,
     index: GraphIndex,
     config: MatchConfig,
+    segment_id: int = -1,
+    trace_sink: list[CandidateTraceRow] | None = None,
 ) -> list[EdgeCandidate]:
-    """Minimum-cost candidate path for one segment (same algorithm as hmm.py)."""
+    """Minimum-cost candidate path for one segment (same algorithm as hmm.py).
+
+    If trace_sink is given, one CandidateTraceRow per (step, candidate) is
+    appended to it as the DP runs, recording each candidate's emission cost,
+    the transition cost from whichever predecessor the DP selected as best
+    for it, and the resulting cumulative cost — the same values the DP
+    itself computes, just stashed instead of discarded.
+    """
     steps = [(oi, ts, x, y) for oi, ts, x, y in obs if cands.get(oi)]
     if not steps:
         return []
@@ -342,6 +384,18 @@ def _viterbi_segment(
     costs = np.array([c.emission_cost for c in first])
     back: list[list[int]] = [[-1] * len(first)]
     all_cands: list[list[EdgeCandidate]] = [first]
+    trace_rows: list[list[CandidateTraceRow]] | None = None
+    if trace_sink is not None:
+        trace_rows = [[
+            CandidateTraceRow(
+                obs_index=cc.obs_index, segment_id=segment_id, candidate_idx=kc,
+                edge=cc.edge, offset_m=cc.offset_m, distance_m=cc.distance_m,
+                emission_cost=cc.emission_cost, x=cc.x, y=cc.y,
+                pred_obs_index=None, pred_candidate_idx=None,
+                transition_cost=None, cumulative_cost=float(costs[kc]),
+            )
+            for kc, cc in enumerate(first)
+        ]]
 
     for t in range(1, len(steps)):
         oi, ts, x, y = steps[t]
@@ -356,17 +410,33 @@ def _viterbi_segment(
 
         new_costs = np.full(len(curr), _LARGE_COST)
         bp = np.zeros(len(curr), dtype=int)
+        best_trans = np.full(len(curr), np.nan)
         for kc, cc in enumerate(curr):
             for jc, pc in enumerate(prev):
                 nd = dist_cache.route_distance(pc, cc, index.edge_lengths, cutoff)
-                c = costs[jc] + network_transition_cost(nd, straight, dt_s, config) \
-                    + cc.emission_cost
+                trans_cost = network_transition_cost(nd, straight, dt_s, config)
+                c = costs[jc] + trans_cost + cc.emission_cost
                 if c < new_costs[kc]:
                     new_costs[kc] = c
                     bp[kc] = jc
+                    best_trans[kc] = trans_cost
         costs = new_costs
         back.append(bp.tolist())
         all_cands.append(curr)
+
+        if trace_rows is not None:
+            trace_rows.append([
+                CandidateTraceRow(
+                    obs_index=cc.obs_index, segment_id=segment_id, candidate_idx=kc,
+                    edge=cc.edge, offset_m=cc.offset_m, distance_m=cc.distance_m,
+                    emission_cost=cc.emission_cost, x=cc.x, y=cc.y,
+                    pred_obs_index=prev[bp[kc]].obs_index,
+                    pred_candidate_idx=int(bp[kc]),
+                    transition_cost=float(best_trans[kc]),
+                    cumulative_cost=float(costs[kc]),
+                )
+                for kc, cc in enumerate(curr)
+            ])
 
     k = int(np.argmin(costs))
     path = [k]
@@ -374,6 +444,13 @@ def _viterbi_segment(
         k = back[t][k]
         path.append(k)
     path.reverse()
+
+    if trace_rows is not None:
+        for t, k in enumerate(path):
+            trace_rows[t][k].is_on_winning_path = True
+        for rows in trace_rows:
+            trace_sink.extend(rows)
+
     return [all_cands[t][k] for t, k in enumerate(path)]
 
 
@@ -442,6 +519,7 @@ def _match_usable_segments(
     index: GraphIndex,
     config: MatchConfig,
     dist_cache: NetworkDistanceCache,
+    trace_sink: list[CandidateTraceRow] | None = None,
 ) -> list[tuple[int, list[EdgeCandidate]]]:
     """Generate edge candidates for every usable row and run per-segment Viterbi.
 
@@ -476,7 +554,10 @@ def _match_usable_segments(
             if oi in cands:
                 x, y = index.transformer_fwd.transform(float(row["lon"]), float(row["lat"]))
                 obs.append((oi, row["timestamp"], x, y))
-        path = _viterbi_segment(obs, cands, dist_cache, index, config)
+        path = _viterbi_segment(
+            obs, cands, dist_cache, index, config,
+            segment_id=int(seg_id), trace_sink=trace_sink,
+        )
         if path:
             segment_paths.append((int(seg_id), path))
 
@@ -745,6 +826,7 @@ def match_trip_to_network_rows(
     transformer_inv: pyproj.Transformer | None = None,
     route: Route1D | None = None,
     polygon=None,
+    trace_sink: list[CandidateTraceRow] | None = None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
     enriched dataframe — the network-matcher counterpart of
@@ -780,6 +862,14 @@ def match_trip_to_network_rows(
     such rows are never interpolated regardless of gap size. Otherwise same
     vocabulary as the single-track pipeline. Row order matches the input
     dataframe.
+
+    If `trace_sink` is given (an empty list), it is filled in place with one
+    CandidateTraceRow per (observation, candidate) considered by the Viterbi
+    DP across all segments — every candidate's emission cost, the transition
+    cost from whichever predecessor the DP selected as best for it, the
+    resulting cumulative DP cost, and whether it ended up on the winning
+    path. Used by visualization.generate_hmm_debug_map; has no effect on the
+    returned dataframe or on behavior when left as None.
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
@@ -799,7 +889,14 @@ def match_trip_to_network_rows(
     df = detect_gaps(df, config)
     df = assign_match_segments(df, config)
 
-    seg_pairs = _match_usable_segments(df, index, config, dist_cache)
+    seg_pairs = _match_usable_segments(df, index, config, dist_cache, trace_sink=trace_sink)
+    if trace_sink:
+        xs = np.array([r.x for r in trace_sink])
+        ys = np.array([r.y for r in trace_sink])
+        lons, lats = transformer_inv.transform(xs, ys)
+        for r, lon, lat in zip(trace_sink, lons, lats):
+            r.lon = float(lon)
+            r.lat = float(lat)
     if not seg_pairs:
         df = _add_empty_network_match_columns(df)
         return df.sort_values("original_index", kind="stable").reset_index(drop=True)

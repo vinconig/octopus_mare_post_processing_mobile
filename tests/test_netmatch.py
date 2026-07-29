@@ -12,6 +12,7 @@ from shapely.geometry import LineString, Point
 
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.netmatch import (
+    CandidateTraceRow,
     EdgeCandidate,
     GraphIndex,
     _AnchorLink,
@@ -419,3 +420,51 @@ def test_rows_preserve_input_row_order():
     pd.testing.assert_series_equal(
         result["Timestamp"].reset_index(drop=True), trip_df["Timestamp"].reset_index(drop=True)
     )
+
+
+def test_rows_trace_sink_records_candidates_and_winning_path():
+    index, inv = _make_l_shaped_index()
+    base = pd.Timestamp("2026-01-01T12:00:00Z")
+    rows = [
+        _row(inv, 660010.0, 7470000.0, base),
+        _row(inv, 660050.0, 7470000.0, base + pd.Timedelta(seconds=30)),
+        _row(inv, 660090.0, 7470000.0, base + pd.Timedelta(seconds=60)),
+    ]
+    trip_df = pd.DataFrame(rows)
+    config = _base_config()
+
+    trace_sink: list[CandidateTraceRow] = []
+    result = match_trip_to_network_rows(trip_df, "t5", index, config, trace_sink=trace_sink)
+
+    assert trace_sink, "trace_sink should be populated when passed in"
+    assert all(isinstance(r, CandidateTraceRow) for r in trace_sink)
+
+    by_obs: dict[int, list[CandidateTraceRow]] = {}
+    for r in trace_sink:
+        by_obs.setdefault(r.obs_index, []).append(r)
+
+    # First observation of the (only) segment has no predecessor.
+    first_obs = min(by_obs)
+    for r in by_obs[first_obs]:
+        assert r.transition_cost is None
+        assert r.pred_obs_index is None
+        assert r.cumulative_cost == pytest.approx(r.emission_cost)
+
+    # Later observations' candidates all have a resolved predecessor + transition cost.
+    for oi, group in by_obs.items():
+        if oi == first_obs:
+            continue
+        for r in group:
+            assert r.transition_cost is not None
+            assert r.pred_obs_index is not None
+            assert r.lon is not None and r.lat is not None
+
+    # Exactly one candidate per observation is on the winning path, and its edge
+    # matches the edge actually chosen by match_trip_to_network_rows.
+    matched = result[result["match_status"] == "matched"].set_index("original_index")
+    for oi, group in by_obs.items():
+        winners = [r for r in group if r.is_on_winning_path]
+        assert len(winners) == 1
+        winner = winners[0]
+        row = matched.loc[oi]
+        assert (row["matched_edge_u"], row["matched_edge_v"], row["matched_edge_key"]) == winner.edge

@@ -21,7 +21,7 @@ class MatchConfig:
     # ── GPS noise / candidate generation ───────────────────────────────────
     gps_sigma_m: float = 10.0          # 1-σ GPS position error [m]
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
-    candidate_k: int = 5               # max candidates per observation
+    candidate_k: int = 20               # max candidates per observation
     deduplicate_s_tolerance_m: float = 5.0  # merge candidates this close in s
 
     # ── Timestamp inference ─────────────────────────────────────────────────
@@ -31,7 +31,7 @@ class MatchConfig:
     # ── Gap / segment handling ──────────────────────────────────────────────
     max_bridge_gap_s: float = 90.0     # gaps ≤ this are bridged within one segment
     max_split_gap_s: float = 300.0     # gaps > this force a new HMM segment
-    max_speed_mps: float = 2.0         # ~7.2 km/h; used in transition penalty
+    max_speed_mps: float = 2.5         # ~7.2 km/h; used in transition penalty
 
     # ── Cross-segment gap bridging (network matcher only) ───────────────────
     # A gap between two HMM segments is only bridged with an inferred network
@@ -43,8 +43,8 @@ class MatchConfig:
 
     # ── HMM transition model ────────────────────────────────────────────────
     allow_backward: bool = False
-    backward_penalty: float = 1000.0
-    high_speed_penalty: float = 10000.0
+    backward_penalty: float = 400.0
+    high_speed_penalty: float = 1000.0
 
     # ── Post-HMM interpolation ──────────────────────────────────────────────
     max_interpolation_gap_s: float = 300.0
