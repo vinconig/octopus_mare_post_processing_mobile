@@ -1,8 +1,12 @@
 """Tests for the road-network route-inference pipeline (no OSM download needed)."""
 
+import json
+
 import networkx as nx
 import numpy as np
 import pytest
+import shapely.wkt
+from shapely.geometry import LineString
 
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.io import load_gpx_route, write_gpx_route
@@ -14,6 +18,7 @@ from gps_route_matcher.route_inference import (
     build_edge_counts,
     edge_sequence_to_points,
     highest_support_path,
+    save_route_metadata,
 )
 from gps_route_matcher.netmatch import TripMatchResult
 
@@ -168,3 +173,58 @@ def test_edge_sequence_to_points_dedupes_boundaries():
     pts = edge_sequence_to_points(g, [("a", "b", 0), ("b", "c", 0)])
     # a, b, c — the duplicate 'b' at the edge boundary must be removed
     assert pts == [(0.0, 0.0), (0.001, 0.0), (0.002, 0.0)]
+
+
+# ── route metadata JSON ───────────────────────────────────────────────────────
+
+def _numeric_grid_graph() -> nx.MultiDiGraph:
+    """Same shape as _grid_graph but with int node ids, mirroring real OSM
+    node ids (so u/v/key JSON round-trip through plain Python ints)."""
+    g = nx.MultiDiGraph()
+    coords = {1: (0.0, 0.0), 2: (0.001, 0.0), 3: (0.002, 0.0), 4: (0.001, 0.001)}
+    for n, (x, y) in coords.items():
+        g.add_node(n, x=x, y=y)
+    g.add_edge(1, 2, key=0, length=100.0)
+    g.add_edge(2, 3, key=0, length=100.0)
+    return g
+
+
+def test_save_route_metadata_roundtrip(tmp_path):
+    g = _numeric_grid_graph()
+    path_edges = [(1, 2, 0), (2, 3, 0)]
+    out_path = tmp_path / "route_metadata" / "OM_test_inferred_route.json"
+
+    result_path = save_route_metadata(g, path_edges, route_id="OM_test", path=out_path)
+    assert result_path == out_path
+    assert out_path.is_file()
+
+    with open(out_path) as fh:
+        data = json.load(fh)
+
+    assert data["route_id"] == "OM_test"
+    assert data["edges"] == [
+        {"u": 1, "v": 2, "key": 0, "edge_order": 0},
+        {"u": 2, "v": 3, "key": 0, "edge_order": 1},
+    ]
+    assert set(data["edge_geometry"]) == {"(1,2,0)", "(2,3,0)"}
+    for edge in data["edge_geometry"].values():
+        assert isinstance(shapely.wkt.loads(edge["geometry"]), LineString)
+        assert edge["length"] == 100.0
+
+
+def test_save_route_metadata_dedupes_revisited_edge(tmp_path):
+    g = _numeric_grid_graph()
+    g.add_edge(3, 1, key=0, length=250.0)  # return edge, closes a loop
+    # Route revisits edge (1, 2, 0) twice (e.g. a via-node backtrack).
+    path_edges = [(1, 2, 0), (2, 3, 0), (3, 1, 0), (1, 2, 0)]
+    out_path = tmp_path / "OM_loop_inferred_route.json"
+
+    save_route_metadata(g, path_edges, route_id="OM_loop", path=out_path)
+    with open(out_path) as fh:
+        data = json.load(fh)
+
+    # edges keeps both visits, in order, with distinct edge_order values...
+    assert [e["edge_order"] for e in data["edges"]] == [0, 1, 2, 3]
+    assert data["edges"][0]["u"] == data["edges"][3]["u"] == 1
+    # ...but edge_geometry has exactly one entry per distinct (u, v, key).
+    assert set(data["edge_geometry"]) == {"(1,2,0)", "(2,3,0)", "(3,1,0)"}

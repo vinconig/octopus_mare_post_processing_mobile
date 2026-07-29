@@ -14,6 +14,7 @@ smoothing in the cost keeps such edges usable.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pyproj
 from scipy.spatial import cKDTree
+from shapely.geometry import LineString
 
 from .netmatch import EdgeKey, GraphIndex, TripMatchResult
 
@@ -420,3 +422,53 @@ def edge_sequence_to_points(
             if not points or points[-1] != pt:
                 points.append(pt)
     return points
+
+
+def _edge_geometry_wkt(graph: nx.MultiDiGraph, u: int, v: int, k: int) -> str:
+    """WKT for one edge's geometry, falling back to a straight node-to-node
+    line when OSMnx didn't keep one (same fallback as edge_sequence_to_points)."""
+    data = graph[u][v][k]
+    geom = data.get("geometry")
+    if geom is None:
+        geom = LineString([
+            (float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])),
+            (float(graph.nodes[v]["x"]), float(graph.nodes[v]["y"])),
+        ])
+    return geom.wkt
+
+
+def save_route_metadata(
+    graph: nx.MultiDiGraph, path_edges: list[EdgeKey], route_id: str, path: str | Path
+) -> Path:
+    """Persist the inferred route's ordered edge sequence + per-edge geometry
+    as JSON, so downstream analysis (e.g. edge-level environmental
+    aggregation) has a durable source of truth for "which edges, in what
+    order, make up this route" without needing to reconstruct it from the
+    graph or re-run route inference.
+
+    edges: one entry per position in path_edges (route order preserved,
+    including any repeated edge on via-node backtracks).
+    edge_geometry: one entry per distinct (u, v, key), keyed as "(u,v,key)".
+    """
+    edges = [
+        {"u": int(u), "v": int(v), "key": int(k), "edge_order": i}
+        for i, (u, v, k) in enumerate(path_edges)
+    ]
+
+    edge_geometry: dict[str, dict] = {}
+    for u, v, k in path_edges:
+        key = f"({int(u)},{int(v)},{int(k)})"
+        if key in edge_geometry:
+            continue
+        edge_geometry[key] = {
+            "geometry": _edge_geometry_wkt(graph, u, v, k),
+            "length": float(graph[u][v][k].get("length", 0.0)),
+        }
+
+    data = {"route_id": route_id, "edges": edges, "edge_geometry": edge_geometry}
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(data, fh, indent=2)
+    return path
