@@ -27,6 +27,7 @@ from gps_route_matcher.route_inference import (
     highest_support_path,
     path_count_diagnostics,
     save_edge_counts,
+    save_route_metadata,
 )
 from gps_route_matcher.visualization import _BAIRRO_KML_PATH, _load_all_tracks, generate_tracks_matched
 
@@ -154,6 +155,10 @@ def infer_route(
     gpx_path = PROJECT_ROOT / "routes" / f"Inferred_Route_{tag}.gpx"
     write_gpx_route(route_points, str(gpx_path), name=f"Inferred route ({tag})")
     print(f"    GPX → {gpx_path}")
+
+    metadata_path = PROJECT_ROOT / "routes" / "route_metadata" / f"{tag}_inferred_route.json"
+    save_route_metadata(graph, path_edges, route_id=tag, path=metadata_path)
+    print(f"    route metadata → {metadata_path}")
 
     viz_path = generate_tracks_matched(
         counted, str(out_dir / f"tracks_matched_{tag}.html"), route_points
