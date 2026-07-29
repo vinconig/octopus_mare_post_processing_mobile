@@ -31,7 +31,7 @@ class MatchConfig:
     # ── Gap / segment handling ──────────────────────────────────────────────
     max_bridge_gap_s: float = 90.0     # gaps ≤ this are bridged within one segment
     max_split_gap_s: float = 300.0     # gaps > this force a new HMM segment
-    max_speed_mps: float = 3.0         # ~10.8 km/h; used in transition penalty
+    max_speed_mps: float = 2.0         # ~7.2 km/h; used in transition penalty
 
     # ── Cross-segment gap bridging (network matcher only) ───────────────────
     # A gap between two HMM segments is only bridged with an inferred network
@@ -44,7 +44,7 @@ class MatchConfig:
     # ── HMM transition model ────────────────────────────────────────────────
     allow_backward: bool = False
     backward_penalty: float = 1000.0
-    high_speed_penalty: float = 1000.0
+    high_speed_penalty: float = 10000.0
 
     # ── Post-HMM interpolation ──────────────────────────────────────────────
     max_interpolation_gap_s: float = 300.0

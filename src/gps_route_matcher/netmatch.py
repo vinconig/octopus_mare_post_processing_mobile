@@ -774,8 +774,12 @@ def match_trip_to_network_rows(
         interpolated, group_id, path_m,
         matched_edge_u, matched_edge_v, matched_edge_key
     match_status is one of "matched" | "interpolated" |
-    "unresolved_missing_time" | "unresolved_large_gap" — same vocabulary as
-    the single-track pipeline. Row order matches the input dataframe.
+    "unresolved_missing_time" | "unresolved_large_gap" |
+    "unresolved_out_of_time_bounds" — the last is only possible when
+    out_of_time_bounds is available (config.check_oob and polygon given):
+    such rows are never interpolated regardless of gap size. Otherwise same
+    vocabulary as the single-track pipeline. Row order matches the input
+    dataframe.
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
@@ -864,9 +868,13 @@ def match_trip_to_network_rows(
         group_anchor_path[g] = pm[order]
         group_anchor_oi[g] = np.array(oi_list, dtype=int)[order]
 
+    has_ootb_col = "out_of_time_bounds" in df.columns
     for idx in df.index[~anchor_mask]:
         if not df.at[idx, "timestamp_valid"]:
             df.at[idx, "match_status"] = "unresolved_missing_time"
+            continue
+        if has_ootb_col and bool(df.at[idx, "out_of_time_bounds"]):
+            df.at[idx, "match_status"] = "unresolved_out_of_time_bounds"
             continue
 
         seg_id = int(df.at[idx, "segment_id"])
