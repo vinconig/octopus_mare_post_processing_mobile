@@ -21,14 +21,14 @@ if __name__ == "__main__":
     # download_gdrive_data.download_om_folders(PROJECT_ROOT)
 
     #folder names of all routes/sensors
-    folders = ["OM_1", "OM_2", "OM_3", "OM_4"]
+    folders = ["OM_1_trips", "OM_2_trips", "OM_3_trips", "OM_4_trips"]
 
     # Manual route endpoints per folder ("LAT,LON" or (lat, lon)); leave a folder out (or use None, None) to keep automatic start/end clustering.
     manual_endpoints = {
-        "OM_1": ("-22.839904,-43.252176", "-22.840813,-43.245885"),
-        "OM_2": ("-22.854508,-43.241940", "-22.851474,-43.245772"),
-        "OM_3": ("-22.858845,-43.239657", "-22.867317,-43.241040"),
-        "OM_4": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
+        "OM_1_trips": ("-22.839904,-43.252176", "-22.840813,-43.245885"),
+        "OM_2_trips": ("-22.854508,-43.241940", "-22.851474,-43.245772"),
+        "OM_3_trips": ("-22.858845,-43.239657", "-22.867317,-43.241040"),
+        "OM_4_trips": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
     }
 
 
@@ -46,22 +46,23 @@ if __name__ == "__main__":
     #edge analysis
     route_edge_analysis.route_edge_analysis(folders=folders, overwrite=True)
     route_summary_analysis.route_summary_analysis(folders=folders, overwrite=True)
-    output_path = generate_interactive_map_all_edge_data(
-    os.path.join(PROJECT_ROOT, "output", "map_interactive_all_edge_data.html"))
-    webbrowser.open(f"file://{output_path}")
+    # output_path = generate_interactive_map_all_edge_data(
+    # os.path.join(PROJECT_ROOT, "output", "map_interactive_all_edge_data.html"))
+    # webbrowser.open(f"file://{output_path}")
 
     
 
     #main data panal
     generate_map_info.generate_map_info()
-    output_path = generate_interactive_map_all_data(os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data.html"))
+    output_path = generate_interactive_map_all_data(
+        os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data.html"), folders=folders)
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 
-    #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
-    print(f"Map saved to: {output_path}")
-    webbrowser.open(f"file://{output_path}")
+    # #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
+    # output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
+    # print(f"Map saved to: {output_path}")
+    # webbrowser.open(f"file://{output_path}")
 
 
 

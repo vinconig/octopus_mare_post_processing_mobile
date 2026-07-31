@@ -98,9 +98,7 @@ def infer_route(
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
     print("2/6 Loading trips and preprocessing data …")
-    tracks = _load_all_tracks(polygon)
-    if folders:
-        tracks = tracks[tracks["source_folder"].isin(folders)]
+    tracks = _load_all_tracks(polygon, folders=folders)
     trip_ids = tracks["track_id"].unique()
     if max_trips:
         trip_ids = trip_ids[:max_trips]
