@@ -1,10 +1,10 @@
 """Concatenate raw per-recording CSVs into one file per sensor, then split
 that file into one CSV per trip (morning/evening).
 
-Per folder (OM_1..OM_4):
+Per folder (OM_1_raw..OM_4_raw):
 
-1. Concatenate — read every *.csv sitting directly in data/OM_n/ (its
-   subfolders, e.g. data/OM_4/25-11/, are NOT scanned — only the raw
+1. Concatenate — read every *.csv sitting directly in data/OM_n_raw/ (its
+   subfolders, e.g. data/OM_4_raw/25-11/, are NOT scanned — only the raw
    per-recording files at the top level), sorted by filename, and stack
    them as-is into data/OM_n_concatenated.csv. No cleaning is applied here:
    values are read as text and passed through unchanged, so this file is a
@@ -33,7 +33,7 @@ import pandas as pd
 
 from gps_route_matcher.paths import PROJECT_ROOT
 
-SENSORS: list[str] = ["OM_1", "OM_2", "OM_3", "OM_4"]
+SENSORS: list[str] = ["OM_1_raw", "OM_2_raw", "OM_3_raw", "OM_4_raw"]
 
 TS_COL = "Timestamp"
 TS_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -51,10 +51,12 @@ def read_csv_robust(path):
 
 
 def concatenate_sensor(sensor: str) -> pd.DataFrame | None:
-    """Stack every top-level CSV in data/<sensor>/, sorted by filename, into
-    one DataFrame (raw text, no cleaning), and write it to
-    data/<sensor>_concatenated.csv."""
+    """Stack every top-level CSV in data/<sensor>/ (e.g. data/OM_1_raw/),
+    sorted by filename, into one DataFrame (raw text, no cleaning), and
+    write it to data/<track>_concatenated.csv, where <track> is <sensor>
+    with any trailing "_raw" stripped."""
     sensor_dir = PROJECT_ROOT / "data" / sensor
+    track = sensor.removesuffix("_raw")
     files = sorted(sensor_dir.glob("*.csv"), key=lambda p: p.name)
     print(f"  {sensor}: {len(files)} csv files found directly in {sensor_dir}")
 
@@ -73,7 +75,7 @@ def concatenate_sensor(sensor: str) -> pd.DataFrame | None:
 
     concatenated = pd.concat(frames, ignore_index=True, sort=False)
 
-    out_path = PROJECT_ROOT / "data" / f"{sensor}_concatenated.csv"
+    out_path = PROJECT_ROOT / "data" / f"{track}_concatenated.csv"
     concatenated.to_csv(out_path, index=False)
     print(f"    rows concatenated : {len(concatenated):,}  ({n_unreadable} unreadable files skipped)")
     print(f"    -> {out_path}")
@@ -82,7 +84,9 @@ def concatenate_sensor(sensor: str) -> pd.DataFrame | None:
 
 def split_into_trips(sensor: str, concatenated: pd.DataFrame) -> None:
     """Group concatenated rows into morning/evening trips by date, and write
-    one CSV per trip into data/<sensor>_trips/."""
+    one CSV per trip into data/<track>_trips/, where <track> is <sensor>
+    with any trailing "_raw" stripped."""
+    track = sensor.removesuffix("_raw")
     ts = pd.to_datetime(concatenated[TS_COL], format=TS_FORMAT, errors="coerce")
     has_ts = ts.notna()
     n_bad_ts = int((~has_ts).sum())
@@ -105,7 +109,7 @@ def split_into_trips(sensor: str, concatenated: pd.DataFrame) -> None:
         df.loc[in_trip, "_ts"].dt.strftime("%Y%m%d") + "_" + df.loc[in_trip, "_period"]
     )
 
-    out_dir = PROJECT_ROOT / "data" / f"{sensor}_trips"
+    out_dir = PROJECT_ROOT / "data" / f"{track}_trips"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_trips = 0
@@ -114,7 +118,7 @@ def split_into_trips(sensor: str, concatenated: pd.DataFrame) -> None:
         date_str, trip_period = session_id.split("_", 1)
         duration_min = int((g["_ts"].iat[-1] - g["_ts"].iat[0]).total_seconds() // 60)
 
-        trip_name = f"{sensor}_{date_str}_{trip_period}_{duration_min}durmin.csv"
+        trip_name = f"{track}_{date_str}_{trip_period}_{duration_min}durmin.csv"
         g.drop(columns=["_ts", "_period", "_session_id"]).to_csv(out_dir / trip_name, index=False)
         n_trips += 1
 
@@ -142,8 +146,8 @@ def make_trip_data(sensors: list[str] | None = None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sensors", nargs="+", default=None,
-                        help="Restrict to these sensors (e.g. OM_2). Default: all of "
-                             "OM_1..OM_4.")
+                        help="Restrict to these sensors (e.g. OM_2_raw). Default: all of "
+                             "OM_1_raw..OM_4_raw.")
     args = parser.parse_args()
     make_trip_data(sensors=args.sensors)
 

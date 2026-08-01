@@ -1,4 +1,4 @@
-from gps_route_matcher.visualization import generate_interactive_map, generate_interactive_map_all_edge_data
+from gps_route_matcher.visualization import generate_interactive_map, generate_interactive_map_all_edge_data, generate_interactive_map_all_data_incl_edges
 from gps_route_matcher.visualization import generate_interactive_map_all_data, generate_hmm_debug_map
 from gps_route_matcher.visualization import generate_initial_map
 from gps_route_matcher.visualization import generate_tracks
@@ -13,12 +13,16 @@ import map_matching
 import route_edge_analysis
 import route_summary_analysis
 import generate_map_info
+import make_trip_data
 
 
 if __name__ == "__main__":
     
     #initial data download from google drive (only needs to be done once, commented out after first run)
     # download_gdrive_data.download_om_folders(PROJECT_ROOT)
+
+    #make trip data from raw CSVs, concatenates all CSVs per sensor and splits them into morning/evening trips
+    make_trip_data.make_trip_data(sensors=["OM_1_raw", "OM_2_raw", "OM_3_raw", "OM_4_raw"])
 
     #folder names of all routes/sensors
     folders = ["OM_1_trips", "OM_2_trips", "OM_3_trips", "OM_4_trips"]
@@ -51,22 +55,20 @@ if __name__ == "__main__":
 
     
 
-    #main data panal
+    # #main data panal
     generate_map_info.generate_map_info()
     output_path = generate_interactive_map_all_data(
         os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data.html"), folders=folders)
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 
-    #generate interactive map of all edge analysis data
-    output_path = generate_interactive_map_all_edge_data(
-        os.path.join(PROJECT_ROOT, "output", "map_interactive_all_edge_data.html"), folders=folders)
-    webbrowser.open(f"file://{output_path}")
 
-    # #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
+    # # #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3_raw/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 
-
-
+    #replaces both generate_interactive_map_all_edge_data and generate_interactive_map_all_data, generates a single map with all data and edge analysis data
+    output_path = generate_interactive_map_all_data_incl_edges(
+    os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
+    webbrowser.open(f"file://{output_path}")

@@ -5,7 +5,7 @@ Kept dependency-light (no plotly/geopandas) so analysis.py doesn't have to
 pull in visualization.py's heavy plotting stack just to reuse this regex.
 
 Two conventions are supported:
-  TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv     (data/OM_<n>, the
+  TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv     (data/OM_<n>_raw, the
       original per-recording exports; period is derived from the hour)
   TRACK_YYYYMMDD_<morning|evening>_DURATIONdurmin.csv (data/OM_<n>_trips,
       one CSV per trip already; period is named directly, no recid)
