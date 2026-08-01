@@ -53,7 +53,7 @@ def map_match(
     """
     print("1/4 Loading bairro polygon and road graph …")
     polygon = load_kml_polygon(str(_BAIRRO_KML_PATH)).union_all()
-    graph = get_road_graph(polygon, network_type="all", force_refresh=force_refresh)
+    graph = get_road_graph(polygon, network_type="walk", force_refresh=force_refresh)
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
     print("2/4 Building graph index …")

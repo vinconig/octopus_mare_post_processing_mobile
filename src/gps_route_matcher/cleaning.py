@@ -154,19 +154,29 @@ def inspect_gps_oob(
                                     gps_valid was already False.
     out_of_bounds                : bool – distance_to_inferred_route_m
                                     exceeds config.oob_buffer_m.
+    route_s_m                    : float – arc-length position of the
+                                    point's projection onto `route` [m from
+                                    route start]; NaN where gps_valid was
+                                    already False. Used downstream (see
+                                    inspect_gps_ootb) to anchor the walk's
+                                    time window on the point closest to the
+                                    route start rather than the earliest
+                                    in-bounds timestamp.
     """
     df = df.copy()
 
     df["distance_to_inferred_route_m"] = np.nan
     df["out_of_bounds"] = False
+    df["route_s_m"] = np.nan
 
     valid_idx = df.index[df["gps_valid"]]
     for idx in valid_idx:
         lon = df.at[idx, "lon"]
         lat = df.at[idx, "lat"]
-        _, distance_m = project_lonlat_to_route(route, lon, lat)
+        s_m, distance_m = project_lonlat_to_route(route, lon, lat)
         df.at[idx, "distance_to_inferred_route_m"] = distance_m
         df.at[idx, "out_of_bounds"] = distance_m > config.oob_buffer_m
+        df.at[idx, "route_s_m"] = s_m
 
     return df
 
@@ -203,11 +213,27 @@ def inspect_gps_ootb(
     and derive the final usable_for_hmm.
 
     Runs inspect_gps_oob first if out_of_bounds isn't present yet. The
-    temporal window is [first, last] timestamp among rows that are
-    gps_valid & timestamp_valid & ~out_of_bounds (i.e. confirmed on-route
-    fixes) – participants often had the sensor recording before reaching /
-    after leaving the mapped route, so the window is derived from the data
-    itself rather than assumed to be the full recording.
+    temporal window is [t_min, t_max] among rows that are gps_valid &
+    timestamp_valid & ~out_of_bounds (i.e. confirmed on-route fixes) –
+    participants often had the sensor recording before reaching / after
+    leaving the mapped route, so the window is derived from the data itself
+    rather than assumed to be the full recording.
+
+    t_min/t_max are NOT simply the earliest/latest confirmed on-route
+    timestamps: on the way to the route start (or away from its end), the
+    walk can briefly cross the route elsewhere (e.g. a nearby street),
+    producing an in-buffer fix that isn't actually part of walking the
+    route. Instead, t_min/t_max are the timestamps of the confirmed
+    on-route fixes whose route_s_m (arc-length projection onto `route`, see
+    inspect_gps_oob) is smallest/largest – i.e. the fixes closest to the
+    route's own start and end points.
+
+    Because t_min and t_max are chosen independently by spatial extremity,
+    two separate spurious crossings at opposite ends of the route (e.g. one
+    near the end very early, one near the start very late) could in
+    principle invert the window (t_min > t_max). If that happens, this
+    falls back to the simple earliest/latest confirmed-on-route timestamp
+    window instead, which is always non-inverted by construction.
 
     If no row ever qualifies as a confirmed on-route fix, every row is
     marked out_of_time_bounds = True (no window can be established).
@@ -230,8 +256,15 @@ def inspect_gps_ootb(
 
     anchor_mask = df["gps_valid"] & df["timestamp_valid"] & ~df["out_of_bounds"]
     if anchor_mask.any():
-        t_min = df.loc[anchor_mask, "timestamp"].min()
-        t_max = df.loc[anchor_mask, "timestamp"].max()
+        anchors = df.loc[anchor_mask]
+        t_min = anchors.loc[anchors["route_s_m"].idxmin(), "timestamp"]
+        t_max = anchors.loc[anchors["route_s_m"].idxmax(), "timestamp"]
+        if t_min > t_max:
+            # Two independent spurious crossings at opposite route ends
+            # inverted the window; fall back to the simple (always
+            # non-inverted) earliest/latest anchor timestamp window.
+            t_min = anchors["timestamp"].min()
+            t_max = anchors["timestamp"].max()
         in_window = df["timestamp_valid"] & df["timestamp"].between(t_min, t_max)
         df["out_of_time_bounds"] = ~in_window
     else:

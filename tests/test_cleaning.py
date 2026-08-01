@@ -245,6 +245,82 @@ def test_inspect_gps_ootb_marks_outside_core_window_and_recomputes_usable_for_hm
     assert list(out["usable_for_hmm"]) == [False, True, True, False]
 
 
+def test_inspect_gps_ootb_anchors_t_min_on_fix_closest_to_route_start():
+    # Row 0: an early, spurious in-buffer fix picked up while walking toward
+    # the route start, but it crosses the route partway along (a route_s_m
+    # larger than the real start's, though still smaller than the real
+    # walk's furthest point) rather than at the start. The naive "earliest
+    # anchor timestamp" rule would wrongly anchor t_min here. Row 1: still
+    # approaching, off route. Rows 2-3: the real on-route walk, starting at
+    # the route's own start point (route_s_m ~ 0) and progressing toward its
+    # far end. Row 4: leaving the route.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -21.9995},  # mid-route, spurious
+        {"timestamp": "2026-01-01 00:05:00", "lon": -42.9, "lat": -22.0},     # off route
+        {"timestamp": "2026-01-01 00:10:00", "lon": -43.0, "lat": -22.0},     # on route, at start
+        {"timestamp": "2026-01-01 00:15:00", "lon": -43.0, "lat": -21.9992},  # on route, near end
+        {"timestamp": "2026-01-01 00:20:00", "lon": -42.9, "lat": -22.0},     # off route
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = inspect_gps_ootb(cleaned, cfg, _ROUTE)
+
+    # t_min is anchored on row 2 (route_s_m ~ 0), not row 0 (earliest anchor
+    # timestamp overall) — so rows 0-1 fall outside the derived window.
+    assert list(out["out_of_time_bounds"]) == [True, True, False, False, True]
+    assert list(out["usable_for_hmm"]) == [False, False, True, True, False]
+
+
+def test_inspect_gps_ootb_anchors_t_max_on_fix_closest_to_route_end():
+    # Mirror of the t_min case: after properly leaving the route, the walk
+    # can re-cross it (e.g. doubling back near the start) well after the
+    # real walk ended. Row 0: off route, before start. Row 1: on route, at
+    # the start (route_s_m ~ 0). Row 2: on route, near the route's *end*
+    # (route_s_m largest) — this is the true end of the walk. Row 3: off
+    # route, properly leaving. Row 4: a late, spurious in-buffer fix back
+    # near the start (route_s_m ~ 0) — NOT part of the real walk. The naive
+    # "latest anchor timestamp" rule would wrongly anchor t_max here.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -42.9, "lat": -22.0},     # off route
+        {"timestamp": "2026-01-01 00:05:00", "lon": -43.0, "lat": -22.0},     # on route, at start
+        {"timestamp": "2026-01-01 00:10:00", "lon": -43.0, "lat": -21.9991},  # on route, near end
+        {"timestamp": "2026-01-01 00:15:00", "lon": -42.9, "lat": -22.0},     # off route
+        {"timestamp": "2026-01-01 00:20:00", "lon": -43.0, "lat": -22.0},     # near start again, spurious
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = inspect_gps_ootb(cleaned, cfg, _ROUTE)
+
+    # t_max is anchored on row 2 (route_s_m largest), not row 4 (latest
+    # anchor timestamp overall) — so rows 3-4 fall outside the derived
+    # window, even though row 4 is itself spatially in-buffer.
+    assert list(out["out_of_time_bounds"]) == [True, False, False, True, True]
+    assert list(out["usable_for_hmm"]) == [False, True, True, False, False]
+
+
+def test_inspect_gps_ootb_falls_back_when_s_anchored_window_would_invert():
+    # Two independent spurious crossings at opposite route ends, with
+    # inverted timing relative to each other: row 0 is near the route's end
+    # (largest route_s_m) but earliest in time; row 2 is at the route's
+    # start (smallest route_s_m) but later in time. Anchoring t_min/t_max
+    # purely on route_s_m would give t_min=00:10 (row 2) > t_max=00:00 (row
+    # 0) — an inverted, empty window. This must fall back to the simple
+    # earliest/latest anchor timestamp window ([00:00, 00:10]) instead of
+    # marking every row out_of_time_bounds.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -21.9991},  # near route end
+        {"timestamp": "2026-01-01 00:05:00", "lon": -42.9, "lat": -22.0},     # off route
+        {"timestamp": "2026-01-01 00:10:00", "lon": -43.0, "lat": -22.0},     # on route, at start
+        {"timestamp": "2026-01-01 00:15:00", "lon": -42.9, "lat": -22.0},     # off route
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    cleaned = clean_gps_dataframe(df, cfg)
+    out = inspect_gps_ootb(cleaned, cfg, _ROUTE)
+
+    assert list(out["out_of_time_bounds"]) == [False, False, False, True]
+    assert list(out["usable_for_hmm"]) == [True, False, True, False]
+
+
 def test_inspect_gps_ootb_no_anchor_marks_everything_out_of_time_bounds():
     # Every row is out_of_bounds, so no confirmed on-route fix exists to
     # anchor a temporal window.

@@ -15,10 +15,13 @@ from gps_route_matcher.netmatch import (
     CandidateTraceRow,
     EdgeCandidate,
     GraphIndex,
+    NetworkDistanceCache,
     _AnchorLink,
     _anchor_path_positions,
+    _is_reversal,
     _link_segment_paths,
     _network_gap_distance,
+    _viterbi_segment,
     _walk_forward,
     match_trip_to_network_rows,
 )
@@ -104,6 +107,113 @@ def test_unreachable_returns_inf():
     edge_lengths = [10.0]
     dist = _network_gap_distance(prev, curr, _make_graph(), edge_lengths)
     assert math.isinf(dist)
+
+
+# ── reversal detection / penalty ────────────────────────────────────────────
+
+
+def test_route_distance_same_edge_backward_returns_inf():
+    """NetworkDistanceCache.route_distance (used inside Viterbi's own candidate
+    selection, unlike _network_gap_distance) must reject a backward offset move
+    on the same directed edge outright, without falling through to a wasted
+    Dijkstra search back to the edge's own start node."""
+    cache = NetworkDistanceCache(_make_graph())
+    prev = _cand((2, 3, 0), offset_m=30.0)
+    curr = _cand((2, 3, 0), offset_m=10.0)
+    dist = cache.route_distance(prev, curr, np.asarray(_EDGE_LENGTHS), cutoff=1000.0)
+    assert math.isinf(dist)
+
+
+def test_is_reversal_same_edge_forward_is_false():
+    prev = _cand_full((1, 2, 0), edge_idx=0, offset_m=2.0)
+    curr = _cand_full((1, 2, 0), edge_idx=0, offset_m=7.0)
+    assert _is_reversal(prev, curr) is False
+
+
+def test_is_reversal_same_edge_backward_is_true():
+    prev = _cand_full((1, 2, 0), edge_idx=0, offset_m=7.0)
+    curr = _cand_full((1, 2, 0), edge_idx=0, offset_m=2.0)
+    assert _is_reversal(prev, curr) is True
+
+
+def test_is_reversal_paired_reverse_edge_is_true():
+    prev = _cand_full((1, 2, 0), edge_idx=0, offset_m=8.0)
+    curr = _cand_full((2, 1, 0), edge_idx=1, offset_m=2.0)
+    assert _is_reversal(prev, curr) is True
+
+
+def test_is_reversal_unrelated_edge_is_false():
+    """Continuing through an intersection onto a different street is not a
+    reversal, even though it's also a different edge_idx."""
+    prev = _cand_full((1, 2, 0), edge_idx=0, offset_m=8.0)
+    curr = _cand_full((2, 3, 0), edge_idx=2, offset_m=2.0)
+    assert _is_reversal(prev, curr) is False
+
+
+def _reversal_graph():
+    """A two-way street 1<->2 (both directed edges present) plus a continuation
+    2->3, used to test that Viterbi prefers continuing forward over flipping to
+    the reverse-direction edge of the street just traversed."""
+    g = nx.MultiDiGraph()
+    g.add_edge(1, 2, key=0, length=10.0)
+    g.add_edge(2, 1, key=0, length=10.0)
+    g.add_edge(2, 3, key=0, length=10.0)
+    return g
+
+
+_REV_EDGE_LENGTHS = np.asarray([10.0, 10.0, 10.0])  # (1,2,0), (2,1,0), (2,3,0)
+
+
+class _RevIndex:
+    """Duck-typed stand-in exposing only what _viterbi_segment needs (edge_lengths)."""
+
+    def __init__(self, edge_lengths):
+        self.edge_lengths = edge_lengths
+
+
+def _viterbi_reversal_fixture(network_reversal_penalty):
+    """Two observations: the first is matched at the end of street 1->2; the
+    second has two candidates of near-identical cost — continuing onto 2->3,
+    or flipping to the reverse-direction edge 2->1 (walking back the way you
+    came). Emission cost is stacked in the reversal candidate's favor (0.0 vs
+    1.0) so the only thing that can save the forward candidate is the penalty.
+    """
+    config = MatchConfig(gps_sigma_m=1.0, max_speed_mps=5.0, high_speed_penalty=1000.0,
+                          network_reversal_penalty=network_reversal_penalty)
+    dist_cache = NetworkDistanceCache(_reversal_graph())
+    index = _RevIndex(_REV_EDGE_LENGTHS)
+
+    cand0 = _cand_full((1, 2, 0), edge_idx=0, offset_m=8.0, obs_index=0)
+    cand_forward = EdgeCandidate(
+        obs_index=1, edge_idx=2, edge=(2, 3, 0), offset_m=2.0,
+        distance_m=0.0, emission_cost=1.0, x=0.0, y=0.0,
+    )
+    cand_reversal = EdgeCandidate(
+        obs_index=1, edge_idx=1, edge=(2, 1, 0), offset_m=2.0,
+        distance_m=0.0, emission_cost=0.0, x=0.0, y=0.0,
+    )
+
+    ts0 = pd.Timestamp("2026-01-01T00:00:00Z")
+    ts1 = ts0 + pd.Timedelta(seconds=5)
+    obs = [(0, ts0, 0.0, 0.0), (1, ts1, 1.0, 0.0)]
+    cands = {0: [cand0], 1: [cand_forward, cand_reversal]}
+
+    path = _viterbi_segment(obs, cands, dist_cache, index, config)
+    return path[-1]
+
+
+def test_reversal_penalty_prefers_continuing_forward():
+    winner = _viterbi_reversal_fixture(network_reversal_penalty=10000.0)
+    assert winner.edge == (2, 3, 0)
+
+
+def test_without_reversal_penalty_would_pick_the_reversal():
+    """Confirms the fixture is actually load-bearing: with the penalty
+    disabled, the (deliberately cheaper-emission) reversal candidate wins,
+    proving test_reversal_penalty_prefers_continuing_forward is testing the
+    penalty itself and not some other tie-break."""
+    winner = _viterbi_reversal_fixture(network_reversal_penalty=0.0)
+    assert winner.edge == (2, 1, 0)
 
 
 # ── _link_segment_paths ────────────────────────────────────────────────────

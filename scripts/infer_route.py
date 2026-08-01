@@ -94,7 +94,7 @@ def infer_route(
 
     print("1/6 Loading bairro polygon and road graph …")
     polygon = load_kml_polygon(str(_BAIRRO_KML_PATH)).union_all()
-    graph = get_road_graph(polygon, network_type="all", force_refresh=force_refresh) #all as to include service roads, paths, etc. for better matching
+    graph = get_road_graph(polygon, network_type="walk", force_refresh=force_refresh) #walk: bidirectional for one-way streets (pedestrians can walk both ways), still includes service roads/paths
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
     print("2/6 Loading trips and preprocessing data …")

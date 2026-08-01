@@ -24,7 +24,7 @@ _NON_ENV_COLUMNS = {
     "source_file",
     "original_index", "timestamp_raw", "lon_raw", "lat_raw", "timestamp",
     "timestamp_valid", "lon", "lat", "gps_valid", "usable_for_hmm", "timestamp_inferred",
-    "distance_to_inferred_route_m", "out_of_bounds", "gps_inside_polygon", "out_of_time_bounds",
+    "distance_to_inferred_route_m", "route_s_m", "out_of_bounds", "gps_inside_polygon", "out_of_time_bounds",
     "dt_s", "gap_before", "gap_id", "segment_id",
     "matched_lon", "matched_lat", "distance_to_route_m", "match_status", "interpolated",
     "group_id", "path_m", "matched_edge_u", "matched_edge_v", "matched_edge_key",
@@ -45,6 +45,7 @@ _ENV_STATS = {"avg": "mean"}
 _CORE_OUTPUT_COLUMNS = {
     "route_id", "edge_order", "u", "v", "key", "length", "geometry",
     "start_timestamp", "end_timestamp", "timestamp_mean", "n_points",
+    "includes_interpolated_pts",
 }
 
 
@@ -70,11 +71,13 @@ def assign_points_to_edges(trip_df: pd.DataFrame, route_metadata: dict) -> pd.Da
 
     Keeps both "matched" and "interpolated" rows (both carry real sensor
     readings; only their position was interpolated across a gap). Rows with
-    any other match_status, or matched to an edge outside the route's edge
-    set, are dropped — the route metadata is the source of truth for valid
-    edges, not the matcher's full-graph output.
+    any other match_status, matched to an edge outside the route's edge set,
+    or flagged out_of_time_bounds, are dropped — the route metadata is the
+    source of truth for valid edges, not the matcher's full-graph output.
     """
     df = trip_df[trip_df["match_status"].isin(_ASSIGNED_STATUSES)].copy()
+    if "out_of_time_bounds" in df.columns:
+        df = df[~df["out_of_time_bounds"].fillna(False)]
     df = df.dropna(subset=["matched_edge_u", "matched_edge_v", "matched_edge_key"])
     for col in ("matched_edge_u", "matched_edge_v", "matched_edge_key"):
         df[col] = df[col].astype(int)
@@ -82,6 +85,7 @@ def assign_points_to_edges(trip_df: pd.DataFrame, route_metadata: dict) -> pd.Da
     # If the route backtracks over the same physical edge (rare, via-node
     # loop legs), the point data alone can't tell which visit a measurement
     # belongs to — last edge_order for that (u, v, key) wins.
+    #you could do this via timestamps, but since none of the routes actually has this problem (yet) this can be handled better if it actually comes up, otherwise i would exclude routes that have this backtracking issue
     edge_order_by_key = {
         (e["u"], e["v"], e["key"]): e["edge_order"] for e in route_metadata["edges"]
     }
@@ -104,6 +108,7 @@ def aggregate_by_edge(assigned_df: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.DataFrame(index=grouped.size().index)
     out["n_points"] = grouped.size()
+    out["includes_interpolated_pts"] = grouped["interpolated"].any()
     out["start_timestamp"] = grouped["timestamp"].min()
     out["end_timestamp"] = grouped["timestamp"].max()
     out["timestamp_mean"] = (
@@ -121,7 +126,8 @@ def reindex_to_full_route(agg_df: pd.DataFrame, route_metadata: dict) -> pd.Data
     """Left-join the per-edge aggregation onto the FULL ordered route edge
     list, so every edge of the inferred route appears exactly once, in route
     order, even if no measurement was ever assigned to it (n_points = 0,
-    environmental stats NaN, timestamps NaT)."""
+    includes_interpolated_pts = False, environmental stats NaN, timestamps
+    NaT)."""
     full = (
         pd.DataFrame(route_metadata["edges"])
         .sort_values("edge_order")
@@ -129,6 +135,7 @@ def reindex_to_full_route(agg_df: pd.DataFrame, route_metadata: dict) -> pd.Data
     )
     merged = full.merge(agg_df, on="edge_order", how="left")
     merged["n_points"] = merged["n_points"].fillna(0).astype(int)
+    merged["includes_interpolated_pts"] = merged["includes_interpolated_pts"].fillna(False).astype(bool)
 
     lengths = []
     geometries = []
@@ -146,12 +153,12 @@ def assemble_output(reindexed_df: pd.DataFrame, route_id: str) -> pd.DataFrame:
     """Select/order the final output columns: route + edge identification,
     geometry, timestamps, environmental stats (alphabetical, so output column
     order is stable even though raw matched-CSV column order varies
-    file-to-file), then n_points."""
+    file-to-file), then n_points/includes_interpolated_pts."""
     stat_cols = sorted(c for c in reindexed_df.columns if c not in _CORE_OUTPUT_COLUMNS)
     ordered_cols = [
         "edge_order", "u", "v", "key", "length", "geometry",
         "start_timestamp", "end_timestamp", "timestamp_mean",
-        *stat_cols, "n_points",
+        *stat_cols, "n_points", "includes_interpolated_pts",
     ]
     out = reindexed_df[ordered_cols].copy()
     out.insert(0, "route_id", route_id)

@@ -290,8 +290,14 @@ class NetworkDistanceCache:
         length of prev's edge + node-to-node shortest path + curr's offset.
         Returns inf when unreachable within cutoff.
         """
-        if prev.edge_idx == curr.edge_idx and curr.offset_m >= prev.offset_m:
-            return curr.offset_m - prev.offset_m
+        if prev.edge_idx == curr.edge_idx:
+            if curr.offset_m >= prev.offset_m:
+                return curr.offset_m - prev.offset_m
+            # Backward move on the same directed edge — never a real forward
+            # route (a Dijkstra search back to this edge's own start node
+            # would almost always fail anyway); reversal is instead penalised
+            # explicitly by _is_reversal in _viterbi_segment.
+            return math.inf
 
         exit_node = prev.edge[1]     # v of (u, v, key): direction respected
         entry_node = curr.edge[0]    # u of the target edge
@@ -340,6 +346,16 @@ def network_transition_cost(
     if speed > config.max_speed_mps:
         cost += config.high_speed_penalty * (speed - config.max_speed_mps) ** 2
     return cost
+
+
+def _is_reversal(prev: EdgeCandidate, curr: EdgeCandidate) -> bool:
+    """True if curr reverses direction on the same physical street prev was on:
+    either a backward offset move on the same directed edge, or a switch to
+    that edge's paired reverse-direction edge (u, v, key) -> (v, u, key).
+    """
+    if prev.edge_idx == curr.edge_idx:
+        return curr.offset_m < prev.offset_m
+    return curr.edge[0] == prev.edge[1] and curr.edge[1] == prev.edge[0]
 
 
 # ── Per-trip matching ─────────────────────────────────────────────────────────
@@ -415,6 +431,8 @@ def _viterbi_segment(
             for jc, pc in enumerate(prev):
                 nd = dist_cache.route_distance(pc, cc, index.edge_lengths, cutoff)
                 trans_cost = network_transition_cost(nd, straight, dt_s, config)
+                if _is_reversal(pc, cc):
+                    trans_cost += config.network_reversal_penalty
                 c = costs[jc] + trans_cost + cc.emission_cost
                 if c < new_costs[kc]:
                     new_costs[kc] = c

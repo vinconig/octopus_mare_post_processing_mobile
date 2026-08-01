@@ -37,8 +37,8 @@ if __name__ == "__main__":
     #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
     for i, folder in enumerate(folders): 
        start, end = manual_endpoints.get(folder, (None, None))
-       infer_route.infer_route(folders=[folder], start=start, end=end, force_refresh=False)
-        # infer_route.infer_route(folders=[folder], force_refresh=(i == 0)) #refreshes the map once (for the first folder) to ensure the road graph is cached, then reuses it for the rest
+       #infer_route.infer_route(folders=[folder], start=start, end=end, force_refresh=False)
+       infer_route.infer_route(folders=[folder], start=start, end=end,force_refresh=(i == 0)) #refreshes the map once (for the first folder) to ensure the road graph is cached, then reuses it for the rest
     
     #maps all points per recording to the road network and creates new CSVs with the matched data in data/OM_n_matched/ folders
     map_matching.map_match(folders=folders, force_refresh=False, overwrite=True)
@@ -46,9 +46,8 @@ if __name__ == "__main__":
     #edge analysis
     route_edge_analysis.route_edge_analysis(folders=folders, overwrite=True)
     route_summary_analysis.route_summary_analysis(folders=folders, overwrite=True)
-    # output_path = generate_interactive_map_all_edge_data(
-    # os.path.join(PROJECT_ROOT, "output", "map_interactive_all_edge_data.html"))
-    # webbrowser.open(f"file://{output_path}")
+
+   
 
     
 
@@ -59,10 +58,15 @@ if __name__ == "__main__":
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 
+    #generate interactive map of all edge analysis data
+    output_path = generate_interactive_map_all_edge_data(
+        os.path.join(PROJECT_ROOT, "output", "map_interactive_all_edge_data.html"), folders=folders)
+    webbrowser.open(f"file://{output_path}")
+
     # #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    # output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
-    # print(f"Map saved to: {output_path}")
-    # webbrowser.open(f"file://{output_path}")
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
+    print(f"Map saved to: {output_path}")
+    webbrowser.open(f"file://{output_path}")
 
 
 

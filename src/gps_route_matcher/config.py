@@ -19,9 +19,9 @@ class MatchConfig:
     lat_col: str = "Latitude"
 
     # ── GPS noise / candidate generation ───────────────────────────────────
-    gps_sigma_m: float = 10.0          # 1-σ GPS position error [m]
+    gps_sigma_m: float = 0.5         # 1-σ GPS position error [m]
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
-    candidate_k: int = 20               # max candidates per observation
+    candidate_k: int = 13               # max candidates per observation
     deduplicate_s_tolerance_m: float = 5.0  # merge candidates this close in s
 
     # ── Timestamp inference ─────────────────────────────────────────────────
@@ -41,9 +41,16 @@ class MatchConfig:
     min_segment_points_to_bridge_gap: int = 2   # segments shorter than this never bridge
     max_gap_bridge_m: float = 20.0              # bridges longer than this are left open
 
+    # Flat cost added when a transition reverses direction on the same physical
+    # street — either a backward offset move on the same directed edge, or a
+    # switch to that edge's paired reverse-direction edge (u,v,key) -> (v,u,key).
+    # Mirrors backward_penalty's magnitude/spirit for the network matcher, where
+    # there's no single "forward" direction to check delta_s against.
+    network_reversal_penalty: float = 10000.0
+
     # ── HMM transition model ────────────────────────────────────────────────
     allow_backward: bool = False
-    backward_penalty: float = 400.0
+    backward_penalty: float = 10000.0
     high_speed_penalty: float = 1000.0
 
     # ── Post-HMM interpolation ──────────────────────────────────────────────
@@ -52,7 +59,7 @@ class MatchConfig:
     # ── Cleaning ────────────────────────────────────────────────────────────
     treat_zero_zero_as_missing: bool = True
     check_oob: bool = True    # run inspect_gps_oob (+ categorize_oob/inspect_gps_ootb if polygon given)
-    oob_buffer_m: float = 25.0  # max distance from the inferred route before out_of_bounds is set
+    oob_buffer_m: float = 35.0  # max distance from the inferred route before out_of_bounds is set
 
     # ── Timestamp sequentiality / outlier detection ──────────────────────────
     detect_timestamp_outliers: bool = True
