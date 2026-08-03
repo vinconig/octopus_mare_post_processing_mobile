@@ -54,9 +54,11 @@ def infer_route(
     Parameters
     ----------
     folders:
-        Restrict to these data folders (e.g. ["OM_2"]). Each device tends to
-        have its own route, so per-folder runs usually give a much cleaner
-        result than the all-device default.
+        Restrict to these data folders — literal directory names under data/,
+        i.e. ["OM_2_trips"] for the per-trip splits make_trip_data writes (what
+        scripts/main.py passes) or ["OM_2_raw"] for the raw per-recording
+        exports. Each device tends to have its own route, so per-folder runs
+        usually give a much cleaner result than the all-device default.
     max_trips:
         Only match the first N trips (for quick tests).
     gamma:
@@ -172,9 +174,10 @@ def main() -> None:
     parser.add_argument("--max-trips", type=int, default=None,
                         help="Only match the first N trips (for quick tests)")
     parser.add_argument("--folders", nargs="+", default=None,
-                        help="Restrict to these data folders (e.g. OM_2). Each device "
-                             "tends to have its own route, so per-folder runs usually "
-                             "give a much cleaner result than the all-device default.")
+                        help="Restrict to these data folders, by literal directory name "
+                             "under data/ (e.g. OM_2_trips). Each device tends to have "
+                             "its own route, so per-folder runs usually give a much "
+                             "cleaner result than the all-device default.")
     parser.add_argument("--gamma", type=float, default=2.0,
                         help="Frequency dominance in edge cost (default 2.0)")
     parser.add_argument("--start", type=str, default=None, metavar="LAT,LON",

@@ -17,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 import pyproj
 
+from gps_route_matcher.analysis import load_route_metadata
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.io import load_gpx_route, load_kml_polygon
 from gps_route_matcher.netmatch import (
@@ -82,6 +83,19 @@ def map_match(
         gpx_path = PROJECT_ROOT / "routes" / f"Inferred_Route_{folder}.gpx"
         route = build_route_1d(load_gpx_route(str(gpx_path))) if gpx_path.is_file() else None
 
+        # Edges of this folder's inferred route get several candidate positions
+        # each instead of one, so a continuous match on the correct edge can beat
+        # a jump to a side street near a junction (see MatchConfig.
+        # route_candidates_per_edge). Missing metadata just means no densification.
+        meta_path = PROJECT_ROOT / "routes" / "route_metadata" / f"{folder}_inferred_route.json"
+        route_edges = (
+            {(e["u"], e["v"], e["key"]) for e in load_route_metadata(meta_path)["edges"]}
+            if meta_path.is_file()
+            else None
+        )
+        if route_edges is None:
+            print(f"    {folder}: no route metadata, matching without route densification")
+
         csv_paths = _iter_csv_files(in_dir)
         if max_files is not None:
             csv_paths = csv_paths[:max_files]
@@ -99,7 +113,7 @@ def map_match(
 
             result = match_trip_to_network_rows(
                 trip_df, csv_path.stem, index, config, dist_cache, transformer_inv,
-                route=route, polygon=polygon,
+                route=route, polygon=polygon, route_edges=route_edges,
             )
             result.to_csv(out_path, index=False)
 

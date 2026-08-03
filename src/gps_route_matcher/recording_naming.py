@@ -92,6 +92,7 @@ def _parse_recording_filename(stem: str) -> dict | None:
             "date": m["date"],
             "period": period,
             "recid": int(m["recid"]),
+            "hour": int(m["hour"]),
         }
 
     m = _TRIP_FILENAME_RE.match(stem)
@@ -103,6 +104,7 @@ def _parse_recording_filename(stem: str) -> dict | None:
             "date": m["date"],
             "period": _PERIOD_WORD_TO_PERIOD[m["period_word"]],
             "recid": 0,
+            "hour": None,
         }
 
     return None
