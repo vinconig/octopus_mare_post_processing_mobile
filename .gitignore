@@ -40,4 +40,7 @@ token.json
 # Pytest
 .pytest_cache/
 
+#Claude Code
+.claude
+
 
