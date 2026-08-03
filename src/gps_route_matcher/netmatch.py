@@ -44,7 +44,7 @@ import numpy as np
 import pandas as pd
 import pyproj
 from scipy.spatial import cKDTree
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 from .cleaning import (
     categorize_oob,
@@ -156,18 +156,58 @@ class EdgeCandidate:
     y: float
 
 
+def _candidate_offsets(
+    line: LineString,
+    pt: Point,
+    n_positions: int,
+    config: MatchConfig,
+) -> list[float]:
+    """Candidate offsets along one edge, never inside the node inset zone.
+
+    The nearest projection is clamped into [inset, length - inset] so that a
+    candidate never lands on a node (see MatchConfig.node_inset_m for why).
+    When n_positions > 1, further offsets are added alternating downstream and
+    upstream of it in candidate_spacing_m steps, each clamped to the same
+    interval and de-duplicated — the densification described in
+    MatchConfig.route_candidates_per_edge.
+    """
+    length = line.length
+    inset = min(config.node_inset_m, config.max_node_inset_fraction * length)
+    lo = inset
+    hi = max(inset, length - inset)
+
+    base = min(max(float(line.project(pt)), lo), hi)
+    offsets = [base]
+    for j in range(1, n_positions):
+        step = math.ceil(j / 2) * config.candidate_spacing_m * (1 if j % 2 else -1)
+        offset = min(max(base + step, lo), hi)
+        if all(abs(offset - existing) > 1e-6 for existing in offsets):
+            offsets.append(offset)
+    return offsets
+
+
 def generate_edge_candidates(
     index: GraphIndex,
     lon: float,
     lat: float,
     obs_index: int,
     config: MatchConfig,
+    route_edges: set[EdgeKey] | None = None,
 ) -> list[EdgeCandidate]:
-    """Return up to candidate_k candidate edges for one GPS observation.
+    """Return up to candidate_k candidate positions for one GPS observation.
 
     Nearby edges are found via the sample-point KD-tree; the point is then
-    projected exactly onto each edge geometry. Always returns at least the
-    nearest edge, even when it lies beyond candidate_radius_m.
+    projected exactly onto each edge geometry, with the offset kept clear of
+    both end nodes (_candidate_offsets). Always returns at least the nearest
+    candidate, even when it lies beyond candidate_radius_m.
+
+    route_edges, when given, is the set of edges making up the inferred route
+    for this trip; those edges each contribute config.route_candidates_per_edge
+    positions instead of one, so a continuous match on the correct edge can win
+    over a jump to a side street near a junction. Every other edge contributes
+    its single nearest position, and the added positions are strictly farther
+    from the GPS fix than their own edge's nearest projection — so this widens
+    the state space without making any route edge cheaper to match.
     """
     x, y = index.transformer_fwd.transform(lon, lat)
 
@@ -182,16 +222,20 @@ def generate_edge_candidates(
     edge_ids = set(index.sample_edge_idx[i] for i in within)
     edge_ids.update(index.sample_edge_idx[i] for i in idxs)
 
-    from shapely.geometry import Point
-
     pt = Point(x, y)
-    scored: list[tuple[float, int, float]] = []  # (distance, edge_idx, offset)
+    # (distance, edge_idx, offset, x, y)
+    scored: list[tuple[float, int, float, float, float]] = []
     for ei in edge_ids:
+        ei = int(ei)
         line = index.edge_lines[ei]
-        offset = float(line.project(pt))
-        nearest = line.interpolate(offset)
-        d = float(pt.distance(nearest))
-        scored.append((d, int(ei), offset))
+        n_positions = (
+            config.route_candidates_per_edge
+            if route_edges and index.edge_keys[ei] in route_edges
+            else 1
+        )
+        for offset in _candidate_offsets(line, pt, n_positions, config):
+            pos = line.interpolate(offset)
+            scored.append((float(pt.distance(pos)), ei, offset, float(pos.x), float(pos.y)))
 
     scored.sort(key=lambda t: t[0])
     filtered = [s for s in scored if s[0] <= config.candidate_radius_m]
@@ -200,21 +244,19 @@ def generate_edge_candidates(
     filtered = filtered[: config.candidate_k]
 
     sigma2 = config.gps_sigma_m ** 2
-    out: list[EdgeCandidate] = []
-    for d, ei, offset in filtered:
-        line = index.edge_lines[ei]
-        pos = line.interpolate(offset)
-        out.append(EdgeCandidate(
+    return [
+        EdgeCandidate(
             obs_index=obs_index,
             edge_idx=ei,
             edge=index.edge_keys[ei],
             offset_m=offset,
             distance_m=d,
             emission_cost=d ** 2 / (2.0 * sigma2),
-            x=pos.x,
-            y=pos.y,
-        ))
-    return out
+            x=px,
+            y=py,
+        )
+        for d, ei, offset, px, py in filtered
+    ]
 
 
 @dataclass
@@ -538,6 +580,7 @@ def _match_usable_segments(
     config: MatchConfig,
     dist_cache: NetworkDistanceCache,
     trace_sink: list[CandidateTraceRow] | None = None,
+    route_edges: set[EdgeKey] | None = None,
 ) -> list[tuple[int, list[EdgeCandidate]]]:
     """Generate edge candidates for every usable row and run per-segment Viterbi.
 
@@ -545,6 +588,9 @@ def _match_usable_segments(
     assign_match_segments (usable_for_hmm, segment_id, original_index, lon,
     lat, timestamp all present). Shared by match_trip_to_network and
     match_trip_to_network_rows so the two never diverge.
+
+    route_edges is passed straight through to generate_edge_candidates (see
+    there); None means one candidate position per nearby edge.
 
     Returns (segment_id, winning EdgeCandidate list) pairs, in
     usable["segment_id"].unique() order, skipping segments that produced no
@@ -558,7 +604,9 @@ def _match_usable_segments(
     cands: dict[int, list[EdgeCandidate]] = {}
     for _, row in usable.iterrows():
         oi = int(row["original_index"])
-        cl = generate_edge_candidates(index, float(row["lon"]), float(row["lat"]), oi, config)
+        cl = generate_edge_candidates(
+            index, float(row["lon"]), float(row["lat"]), oi, config, route_edges=route_edges
+        )
         if cl:
             cands[oi] = cl
 
@@ -645,6 +693,7 @@ def match_trip_to_network(
     index: GraphIndex,
     config: MatchConfig,
     dist_cache: NetworkDistanceCache | None = None,
+    route_edges: set[EdgeKey] | None = None,
 ) -> TripMatchResult:
     """Match one trip's GPS points to the road network.
 
@@ -652,6 +701,8 @@ def match_trip_to_network(
     Viterbi per segment, expands the chosen candidates into an ordered edge
     sequence, and bridges across-segment gaps with a network shortest path
     instead of dropping the trip.
+
+    route_edges is passed through to generate_edge_candidates (see there).
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
@@ -662,7 +713,7 @@ def match_trip_to_network(
     df = assign_match_segments(df, config)
 
     n_total = len(df)
-    seg_pairs = _match_usable_segments(df, index, config, dist_cache)
+    seg_pairs = _match_usable_segments(df, index, config, dist_cache, route_edges=route_edges)
     if not seg_pairs:
         return TripMatchResult(trip_id, [], n_total, 0, 0, 0)
     segment_paths = [path for _, path in seg_pairs]
@@ -845,6 +896,7 @@ def match_trip_to_network_rows(
     route: Route1D | None = None,
     polygon=None,
     trace_sink: list[CandidateTraceRow] | None = None,
+    route_edges: set[EdgeKey] | None = None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
     enriched dataframe — the network-matcher counterpart of
@@ -888,6 +940,11 @@ def match_trip_to_network_rows(
     resulting cumulative DP cost, and whether it ended up on the winning
     path. Used by visualization.generate_hmm_debug_map; has no effect on the
     returned dataframe or on behavior when left as None.
+
+    If `route_edges` is given (the {(u, v, key)} set of this trip's inferred
+    route, as written by route_inference.save_route_metadata), those edges get
+    config.route_candidates_per_edge candidate positions each instead of one —
+    see generate_edge_candidates.
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
@@ -907,7 +964,9 @@ def match_trip_to_network_rows(
     df = detect_gaps(df, config)
     df = assign_match_segments(df, config)
 
-    seg_pairs = _match_usable_segments(df, index, config, dist_cache, trace_sink=trace_sink)
+    seg_pairs = _match_usable_segments(
+        df, index, config, dist_cache, trace_sink=trace_sink, route_edges=route_edges
+    )
     if trace_sink:
         xs = np.array([r.x for r in trace_sink])
         ys = np.array([r.y for r in trace_sink])
@@ -1082,6 +1141,7 @@ def match_trip_csv_to_network(
     transformer_inv: pyproj.Transformer | None = None,
     route: Route1D | None = None,
     polygon=None,
+    route_edges: set[EdgeKey] | None = None,
 ) -> pd.DataFrame:
     """Load one trip CSV, match it to the road network, and optionally save
     output. Thin I/O wrapper around match_trip_to_network_rows, mirroring
@@ -1090,7 +1150,7 @@ def match_trip_csv_to_network(
     trip_df = pd.read_csv(csv_path)
     result = match_trip_to_network_rows(
         trip_df, trip_id, index, config, dist_cache, transformer_inv,
-        route=route, polygon=polygon,
+        route=route, polygon=polygon, route_edges=route_edges,
     )
     if output_csv_path is not None:
         out_path = Path(output_csv_path)

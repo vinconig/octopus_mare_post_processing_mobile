@@ -23,6 +23,7 @@ from gps_route_matcher.netmatch import (
     _network_gap_distance,
     _viterbi_segment,
     _walk_forward,
+    generate_edge_candidates,
     match_trip_to_network_rows,
 )
 
@@ -578,3 +579,128 @@ def test_rows_trace_sink_records_candidates_and_winning_path():
         winner = winners[0]
         row = matched.loc[oi]
         assert (row["matched_edge_u"], row["matched_edge_v"], row["matched_edge_key"]) == winner.edge
+
+
+# ── candidate generation: never on a node, densified along route edges ──────
+
+
+class _IdentityTransformer:
+    """Stand-in for GraphIndex.transformer_fwd in tests, so candidate fixtures
+    can use plain metres as 'lon/lat' instead of going through a real CRS."""
+
+    @staticmethod
+    def transform(lon, lat):
+        return lon, lat
+
+
+def _geometry_index(edges):
+    """Real GraphIndex over hand-built metric geometries.
+
+    edges: {(u, v, key): LineString}. Mirrors build_graph_index's sampling but
+    without osmnx/CRS machinery, so candidate generation can be tested against
+    exact coordinates.
+    """
+    edge_keys, edge_lines, lengths, pts, sample_edge_idx = [], [], [], [], []
+    for i, (key, line) in enumerate(edges.items()):
+        edge_keys.append(key)
+        edge_lines.append(line)
+        lengths.append(line.length)
+        n = max(2, int(math.ceil(line.length / 5.0)) + 1)
+        for j in range(n):
+            p = line.interpolate(line.length * j / (n - 1))
+            pts.append((p.x, p.y))
+            sample_edge_idx.append(i)
+    return GraphIndex(
+        graph=None,
+        graph_proj=None,
+        crs_metric="test",
+        transformer_fwd=_IdentityTransformer(),
+        edge_keys=edge_keys,
+        edge_lines=edge_lines,
+        edge_lengths=np.asarray(lengths),
+        kdtree=cKDTree(np.asarray(pts)),
+        sample_edge_idx=np.asarray(sample_edge_idx, dtype=int),
+        edge_index_by_key={k: i for i, k in enumerate(edge_keys)},
+    )
+
+
+def _t_junction_index():
+    """Stem running west→east into node (0,0); crossbar running south→north
+    through it. Both 100 m long, so their shared node sits mid-figure."""
+    return _geometry_index({
+        (1, 2, 0): LineString([(-100.0, 0.0), (0.0, 0.0)]),    # ends at the node
+        (3, 4, 0): LineString([(0.0, -50.0), (0.0, 50.0)]),    # passes through it
+    })
+
+
+def _candidate_config(**overrides):
+    return MatchConfig(node_inset_m=5.0, candidate_radius_m=50.0, candidate_k=30, **overrides)
+
+
+def test_candidate_never_lands_on_a_node():
+    """A point past the east end of the stem must not be matched to the stem's
+    end node: the offset stays node_inset_m clear of it."""
+    index = _t_junction_index()
+    config = _candidate_config()
+    cands = generate_edge_candidates(index, 10.0, 3.0, 0, config)
+
+    stem = [c for c in cands if c.edge == (1, 2, 0)]
+    assert stem, "the stem should still be a candidate edge"
+    length = float(index.edge_lengths[index.edge_index_by_key[(1, 2, 0)]])
+    for c in stem:
+        assert config.node_inset_m <= c.offset_m <= length - config.node_inset_m
+
+
+def test_candidates_at_a_shared_node_have_distinct_positions():
+    """The degeneracy this change exists to remove: two edges meeting at a node
+    must not produce candidates at the same coordinate with the same cost."""
+    index = _t_junction_index()
+    cands = generate_edge_candidates(index, 6.0, -6.0, 0, _candidate_config())
+
+    positions = {(round(c.x, 6), round(c.y, 6)) for c in cands}
+    assert len(positions) == len(cands)
+    assert (0.0, 0.0) not in positions  # the node itself is never a candidate
+
+
+def test_short_edge_offset_stays_inside():
+    """On an edge shorter than 2 * node_inset_m the inset is capped by
+    max_node_inset_fraction, so the interval never collapses or inverts."""
+    index = _geometry_index({(1, 2, 0): LineString([(0.0, 0.0), (4.0, 0.0)])})
+    config = _candidate_config()
+    cands = generate_edge_candidates(index, 100.0, 0.0, 0, config)
+
+    assert len(cands) == 1
+    inset = config.max_node_inset_fraction * 4.0
+    assert inset <= cands[0].offset_m <= 4.0 - inset
+
+
+def test_route_edges_are_densified_and_others_are_not():
+    index = _t_junction_index()
+    config = _candidate_config(route_candidates_per_edge=5, candidate_spacing_m=10.0)
+    cands = generate_edge_candidates(index, -50.0, 2.0, 0, config, route_edges={(1, 2, 0)})
+
+    stem_offsets = sorted(c.offset_m for c in cands if c.edge == (1, 2, 0))
+    assert len(stem_offsets) == 5
+    assert stem_offsets == pytest.approx([30.0, 40.0, 50.0, 60.0, 70.0])
+    assert len([c for c in cands if c.edge == (3, 4, 0)]) == 1
+
+
+def test_route_edges_none_keeps_one_candidate_per_edge():
+    index = _t_junction_index()
+    cands = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config())
+    assert len(cands) == len({c.edge for c in cands})
+
+
+def test_densified_offsets_clamp_to_the_inset_interval():
+    """Densification near an edge end must not step outside [inset, len-inset]."""
+    index = _t_junction_index()
+    config = _candidate_config(route_candidates_per_edge=5, candidate_spacing_m=10.0)
+    cands = generate_edge_candidates(index, -2.0, 2.0, 0, config, route_edges={(1, 2, 0)})
+
+    length = float(index.edge_lengths[index.edge_index_by_key[(1, 2, 0)]])
+    stem = [c for c in cands if c.edge == (1, 2, 0)]
+    assert stem
+    for c in stem:
+        assert config.node_inset_m <= c.offset_m <= length - config.node_inset_m
+    # clamping collapses duplicates rather than emitting the same offset twice
+    assert len({c.offset_m for c in stem}) == len(stem)

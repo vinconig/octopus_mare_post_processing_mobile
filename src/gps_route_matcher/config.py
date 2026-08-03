@@ -19,10 +19,69 @@ class MatchConfig:
     lat_col: str = "Latitude"
 
     # ── GPS noise / candidate generation ───────────────────────────────────
-    gps_sigma_m: float = 0.5         # 1-σ GPS position error [m]
+    # 1-σ GPS position error [m]. Deliberately far below the empirical residual
+    # (median ~5 m, p90 ~16 m): emission is d²/(2σ²) while the network detour
+    # term is |net - straight|/σ, so a small σ keeps geometry dominant over
+    # routing. Raising σ to the "correct" value lets the transition term take
+    # over and the matcher starts preferring shortest paths that backtrack over
+    # the route actually walked. Tuned empirically — do not raise it without
+    # re-checking that behaviour.
+    gps_sigma_m: float = 0.5
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
-    candidate_k: int = 13               # max candidates per observation
+    candidate_k: int = 30               # max candidates per observation
     deduplicate_s_tolerance_m: float = 5.0  # merge candidates this close in s
+
+    # ── Node avoidance (network matcher only) ───────────────────────────────
+    # Shapely's LineString.project() clamps to [0, length], so without an inset
+    # every edge meeting at a node contributes a candidate at exactly that node,
+    # with an identical position and an identical emission cost. The emission
+    # term then says nothing about which street the point is on, the tie falls
+    # through to the transition term, and spatially distinct fixes collapse onto
+    # one coordinate. Candidate offsets are therefore clamped into
+    # [inset, length - inset], so a candidate never sits on a node.
+    node_inset_m: float = 5.0
+    # …but the inset never eats more than this share of a short edge, which keeps
+    # the interval non-empty without special-casing (10% of the walk graph is
+    # under 15 m, 2% under 5 m).
+    max_node_inset_fraction: float = 0.25
+
+    # ── Along-edge candidate densification (network matcher only) ───────────
+    # Edges belonging to the inferred route get several candidate positions
+    # instead of just their single nearest projection, so a continuous match on
+    # the correct edge can win over a jump to a side street near a junction.
+    # These extra positions are strictly farther from the GPS fix than that
+    # edge's own nearest projection, so they never improve its best emission
+    # score — they only win when continuity demands it.
+    #
+    # HOW THE THREE KNOBS INTERACT — change them together, not individually:
+    #
+    #   * route_candidates_per_edge and candidate_spacing_m set the along-edge
+    #     window searched per route edge:
+    #         half-window = (route_candidates_per_edge // 2) * candidate_spacing_m
+    #     At the defaults that is (5 // 2) * 10 = 20 m either side of the
+    #     projection. Widen it by raising either knob; raising the spacing
+    #     widens the window but coarsens it, raising the count keeps the
+    #     resolution and costs candidates.
+    #
+    #   * candidate_k must be large enough to actually hold them. Candidates
+    #     from all nearby edges are pooled, sorted by distance and cut to
+    #     candidate_k, so the budget needed per observation is roughly
+    #         (# nearby route edges) * route_candidates_per_edge
+    #         + (# nearby non-route edges)
+    #     Within candidate_radius_m = 50 m of a fix there are typically 1-3
+    #     route edges and 5-10 other edges, i.e. ~3*5 + 10 = 25 — hence
+    #     candidate_k = 30. Set candidate_k too low and the cut silently drops
+    #     the farthest densified positions first, which is exactly the
+    #     densification you were paying for.
+    #
+    #   * Viterbi is O(candidate_k²) per observation, so candidate_k is the
+    #     cost driver: ~0.3 s per 1000-point trip at k=13, ~1.5 s at k=30.
+    #
+    # Densification only applies when the caller passes route_edges (i.e. in
+    # scripts/map_matching.py, where the inferred route already exists);
+    # route inference itself runs with one candidate per edge.
+    route_candidates_per_edge: int = 5
+    candidate_spacing_m: float = 10.0
 
     # ── Timestamp inference ─────────────────────────────────────────────────
     expected_sample_interval_s: float | None = None
