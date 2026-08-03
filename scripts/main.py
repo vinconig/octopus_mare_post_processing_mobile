@@ -11,7 +11,6 @@ import download_gdrive_data
 import infer_route
 import map_matching
 import route_edge_analysis
-import route_summary_analysis
 import generate_map_info
 import make_trip_data
 
@@ -19,7 +18,7 @@ import make_trip_data
 if __name__ == "__main__":
     
     #initial data download from google drive (only needs to be done once, commented out after first run)
-    # download_gdrive_data.download_om_folders(PROJECT_ROOT)
+    download_gdrive_data.download_om_folders(PROJECT_ROOT)
 
     #make trip data from raw CSVs, concatenates all CSVs per sensor and splits them into morning/evening trips
     make_trip_data.make_trip_data(sensors=["OM_1_raw", "OM_2_raw", "OM_3_raw", "OM_4_raw"])
@@ -35,14 +34,12 @@ if __name__ == "__main__":
         "OM_4_trips": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
     }
 
-
-
     #infer routes from actual data based on traversal frequency
     #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
     for i, folder in enumerate(folders): 
        start, end = manual_endpoints.get(folder, (None, None))
-       #infer_route.infer_route(folders=[folder], start=start, end=end, force_refresh=False) #would not redownload map (unless its not existing in cache/storage location path)
-       infer_route.infer_route(folders=[folder], start=start, end=end,force_refresh=(i == 0)) #refreshes the map once (for the first folder) to ensure the road graph is cached, then reuses it for the rest
+       infer_route.infer_route(folders=[folder], start=start, end=end, force_refresh=False) #would not redownload map (unless its not existing in cache/storage location path)
+       #infer_route.infer_route(folders=[folder], start=start, end=end,force_refresh=(i == 0)) #refreshes the map once (for the first folder) to ensure the road graph is cached, then reuses it for the rest
     
     #maps all points per recording to the road network and creates new CSVs with the matched data in data/OM_n_trips_matched/ folders
     map_matching.map_match(folders=folders, force_refresh=False, overwrite=True)
