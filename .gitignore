@@ -41,6 +41,11 @@ token.json
 .pytest_cache/
 
 #Claude Code
-.claude
+# Ignore .claude/* rather than .claude itself: git won't descend into an
+# ignored directory, so the negation below only works if the directory stays
+# visible. Everything under .claude is local-only (settings, logs) except
+# more_context/, which is shared documentation referenced from CLAUDE.md.
+.claude/*
+!.claude/more_context/
 
 
