@@ -12,6 +12,7 @@ import infer_route
 import map_matching
 import route_edge_analysis
 import generate_map_info
+import generate_route_plots
 import make_trip_data
 import prepare_trips
 
@@ -59,6 +60,9 @@ if __name__ == "__main__":
 
     #edge analysis
     route_edge_analysis.route_edge_analysis(folders=folders, overwrite=True)
+
+    #generate per-route plots with generic filters (all time periods, all dates, all coverage levels)
+    generate_route_plots.generate_route_plots(folders=folders, time_of_day="morning", min_coverage_pct=50, start_date=2025-11-15, end_date=2026-04-30)
 
     #generates data on where the map should pan and zoom to
     generate_map_info.generate_map_info() 
