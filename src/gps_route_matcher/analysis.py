@@ -22,6 +22,9 @@ from .recording_naming import _parse_recording_filename
 _NON_ENV_COLUMNS = {
     "Timestamp", "Latitude", "Longitude",
     "source_file",
+    # sessions.py (per-recording timestamp verdicts, trip assembly)
+    "ts_clean", "ts_valid", "ts_inferred", "ts_reject_reason",
+    "session_id", "session_period", "session_reject_reason",
     "original_index", "timestamp_raw", "lon_raw", "lat_raw", "timestamp",
     "timestamp_valid", "lon", "lat", "gps_valid", "usable_for_hmm", "timestamp_inferred",
     "distance_to_inferred_route_m", "route_s_m", "out_of_bounds", "gps_inside_polygon", "out_of_time_bounds",

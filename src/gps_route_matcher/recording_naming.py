@@ -17,8 +17,6 @@ import re
 
 import pandas as pd
 
-from .config import MatchConfig
-
 # e.g. "OM_1_20251009_16_15durmin__REC000135.csv" → track=OM_1,
 # date=20251009, hour=16, duration=15 (min), recid=135.
 _RECORDING_FILENAME_RE = re.compile(
@@ -36,19 +34,41 @@ _PERIOD_WORD_TO_PERIOD = {"morning": "manha", "evening": "tarde"}
 # A handful of source filenames carry a garbage date (bad device clock at
 # recording time, e.g. year 2015 or 2027) that has nothing to do with GPS
 # timestamp validity but still sorts to the very start/end of the calendar's
-# date list, hijacking its default view. Reuse MatchConfig's own plausible
-# capture window (already used to bound GPS timestamps, see
-# cleaning._absolute_range_mask) as the same bound for the filename date.
-_RECORDING_DATE_MIN = (
-    pd.Timestamp(MatchConfig().valid_timestamp_min).strftime("%Y%m%d")
-    if MatchConfig().valid_timestamp_min
-    else None
-)
-_RECORDING_DATE_MAX = (
-    pd.Timestamp(MatchConfig().valid_timestamp_max).strftime("%Y%m%d")
-    if MatchConfig().valid_timestamp_max
-    else None
-)
+# date list, hijacking its default view.
+#
+# This bound is deliberately its own constant rather than MatchConfig's
+# valid_timestamp_min/max, which it used to borrow. Those bound *GPS
+# timestamps* and are now only a loose backstop behind the per-recording
+# filename anchor (see cleaning.flag_timestamp_outliers), so widening them
+# would silently repopulate the calendar with bad-clock recordings. Two
+# separate questions, two separate constants.
+_RECORDING_DATE_MIN = "20250901"
+_RECORDING_DATE_MAX = "20301231"
+
+
+def parse_capture_time(stem: str) -> pd.Timestamp | None:
+    """The capture time a raw recording's filename declares (UTC), or None if
+    the stem isn't a raw per-recording export.
+
+    Used by sessions.clean_recording as the absolute anchor for that file's
+    timestamps. It is a better anchor than any fixed calendar window: the
+    device writes this name when it closes the file, by which point its clock
+    has synced, whereas the rows it rejects were logged before the sync — so
+    the two disagree precisely in the cases worth catching. 806 of the 807 raw
+    filenames present parse to a plausible time.
+
+    Resolution is one hour (the filename carries no minutes), so callers must
+    compare with a tolerance rather than for equality.
+    """
+    m = _RECORDING_FILENAME_RE.match(stem)
+    if not m:
+        return None
+    try:
+        return pd.Timestamp(
+            f"{m['date']} {int(m['hour']):02d}:00:00", tz="UTC"
+        )
+    except ValueError:
+        return None
 
 
 def _period_for_hour(hour: int) -> str | None:

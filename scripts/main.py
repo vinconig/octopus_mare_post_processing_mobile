@@ -13,17 +13,25 @@ import map_matching
 import route_edge_analysis
 import generate_map_info
 import make_trip_data
+import prepare_trips
 
 
 if __name__ == "__main__":
     
     #initial data download from google drive (only needs to be done once, commented out after first run)
-    download_gdrive_data.download_om_folders(PROJECT_ROOT)
+    #download_gdrive_data.download_om_folders(PROJECT_ROOT)
 
-    #make trip data from raw CSVs, concatenates all CSVs per sensor and splits them into morning/evening trips
+    #make trip data from raw CSVs: validates each recording's timestamps first (per raw file,
+    #while its emit order/filename/own spread are still available), then concatenates per sensor
+    #and cuts the result into one CSV per walk
     make_trip_data.make_trip_data(sensors=["OM_1_raw", "OM_2_raw", "OM_3_raw", "OM_4_raw"])
 
-    #folder names of all routes/sensors, where one csv correlates to one trip, generated from make_trip_data.py
+    #applies the route-independent GPS cleaning once, data/OM_n_trips_split/ -> data/OM_n_trips/,
+    #so infer_route and map_matching below both read the same flags instead of each deriving them.
+    #Everything that needs the inferred route stays in map_matching — the route is inferred below.
+    prepare_trips.prepare_trips(folders=["OM_1_trips_split", "OM_2_trips_split", "OM_3_trips_split", "OM_4_trips_split"])
+
+    #folder names of all routes/sensors, where one csv correlates to one trip
     folders = ["OM_1_trips", "OM_2_trips", "OM_3_trips", "OM_4_trips"]
 
     # Manual route endpoints per folder for inferring the route that was taken ("LAT,LON" or (lat, lon)); leave a folder out (or use None, None) to keep automatic start/end clustering.
