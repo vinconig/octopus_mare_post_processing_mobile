@@ -46,15 +46,8 @@ import pyproj
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString, Point
 
-from .cleaning import (
-    categorize_oob,
-    clean_gps_dataframe,
-    infer_missing_timestamps,
-    inspect_gps_oob,
-    inspect_gps_ootb,
-)
+from .cleaning import prepare_for_matching
 from .config import MatchConfig
-from .gaps import assign_match_segments, detect_gaps
 from .route import Route1D
 
 _LARGE_COST = 1e12
@@ -584,8 +577,8 @@ def _match_usable_segments(
 ) -> list[tuple[int, list[EdgeCandidate]]]:
     """Generate edge candidates for every usable row and run per-segment Viterbi.
 
-    `df` must already have gone through clean_gps_dataframe → detect_gaps →
-    assign_match_segments (usable_for_hmm, segment_id, original_index, lon,
+    `df` must already have gone through cleaning.prepare_for_matching
+    (usable_for_hmm, segment_id, original_index, lon,
     lat, timestamp all present). Shared by match_trip_to_network and
     match_trip_to_network_rows so the two never diverge.
 
@@ -694,23 +687,27 @@ def match_trip_to_network(
     config: MatchConfig,
     dist_cache: NetworkDistanceCache | None = None,
     route_edges: set[EdgeKey] | None = None,
+    polygon=None,
 ) -> TripMatchResult:
     """Match one trip's GPS points to the road network.
 
-    Reuses clean_gps_dataframe / detect_gaps / assign_match_segments, runs
-    Viterbi per segment, expands the chosen candidates into an ordered edge
-    sequence, and bridges across-segment gaps with a network shortest path
-    instead of dropping the trip.
+    Reuses cleaning.prepare_for_matching, runs Viterbi per segment, expands the
+    chosen candidates into an ordered edge sequence, and bridges across-segment
+    gaps with a network shortest path instead of dropping the trip.
+
+    polygon is the bairro boundary; fixes outside it are excluded from matching
+    (the road graph was built from that same boundary, so a fix beyond it has
+    no edges it could honestly belong to).
 
     route_edges is passed through to generate_edge_candidates (see there).
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
 
-    df = clean_gps_dataframe(trip_df, config)
-    df = df.sort_values("timestamp", kind="stable")  # trips must be time-ordered
-    df = detect_gaps(df, config)
-    df = assign_match_segments(df, config)
+    # No route argument: the inferred route is this stage's own output, so the
+    # route-buffer and walk-window checks aren't available yet. That absence is
+    # the only way this differs from match_trip_to_network_rows' cleaning.
+    df = prepare_for_matching(trip_df, config, polygon=polygon)
 
     n_total = len(df)
     seg_pairs = _match_usable_segments(df, index, config, dist_cache, route_edges=route_edges)
@@ -773,11 +770,14 @@ def match_all_trips(
     config: MatchConfig,
     trip_id_col: str = "track_id",
     verbose: bool = True,
+    polygon=None,
 ) -> list[TripMatchResult]:
     """Match every trip in the concatenated tracks dataframe.
 
     Trips are processed independently (grouped by trip_id_col) but share one
     NetworkDistanceCache, since they overwhelmingly traverse the same streets.
+
+    polygon is forwarded to match_trip_to_network (see there).
     """
     dist_cache = NetworkDistanceCache(index.graph_proj)
     results: list[TripMatchResult] = []
@@ -785,7 +785,9 @@ def match_all_trips(
 
     for i, tid in enumerate(trip_ids):
         trip = tracks_df[tracks_df[trip_id_col] == tid]
-        res = match_trip_to_network(trip, str(tid), index, config, dist_cache)
+        res = match_trip_to_network(
+            trip, str(tid), index, config, dist_cache, polygon=polygon
+        )
         results.append(res)
         if verbose and (i + 1) % 25 == 0:
             print(f"  matched {i + 1}/{len(trip_ids)} trips")
@@ -911,27 +913,24 @@ def match_trip_to_network_rows(
     anchors (time-weighted, the network-path analogue of
     interpolation.interpolate_missing_s's arc-length interpolation).
 
-    If config.check_oob is True, `route` must be the Route1D for this trip's
-    respective inferred route (routes/Inferred_Route_OM_x.gpx); points
-    beyond config.oob_buffer_m from that line get out_of_bounds = True (see
-    cleaning.inspect_gps_oob) — gps_valid itself is left untouched. If
-    `polygon` is also given (e.g. the Bairro.kml boundary), gps_inside_polygon
-    and out_of_time_bounds are derived too (cleaning.categorize_oob /
-    inspect_gps_ootb), and usable_for_hmm is finalized as
-    gps_valid & timestamp_valid & ~out_of_bounds & ~out_of_time_bounds.
+    `route` is this trip's inferred route (routes/Inferred_Route_OM_x.gpx):
+    points beyond config.oob_buffer_m from that line get out_of_bounds = True
+    and the walk's own time window is derived from it (cleaning.inspect_gps_oob
+    / inspect_gps_ootb) — gps_valid itself is left untouched. `polygon` (the
+    Bairro.kml boundary) adds gps_inside_polygon. Passing either as None just
+    skips the checks that need it; see cleaning.prepare_for_matching, which
+    owns the ordering.
 
-    Returns all columns produced by clean_gps_dataframe /
-    infer_missing_timestamps / detect_gaps / assign_match_segments, plus:
+    Returns all columns produced by cleaning.prepare_for_matching, plus:
         matched_lon, matched_lat, distance_to_route_m, match_status,
         interpolated, group_id, path_m,
         matched_edge_u, matched_edge_v, matched_edge_key
     match_status is one of "matched" | "interpolated" |
     "unresolved_missing_time" | "unresolved_large_gap" |
-    "unresolved_out_of_time_bounds" — the last is only possible when
-    out_of_time_bounds is available (config.check_oob and polygon given):
-    such rows are never interpolated regardless of gap size. Otherwise same
-    vocabulary as the single-track pipeline. Row order matches the input
-    dataframe.
+    "unresolved_out_of_time_bounds" — the last is only possible when a route
+    was given, since deriving the walk's time window needs one; such rows are
+    never interpolated regardless of gap size. Otherwise same vocabulary as
+    the single-track pipeline. Row order matches the input dataframe.
 
     If `trace_sink` is given (an empty list), it is filled in place with one
     CandidateTraceRow per (observation, candidate) considered by the Viterbi
@@ -953,16 +952,7 @@ def match_trip_to_network_rows(
             index.crs_metric, "EPSG:4326", always_xy=True
         )
 
-    df = clean_gps_dataframe(trip_df, config)
-    if config.check_oob:
-        df = inspect_gps_oob(df, config, route)
-    df = infer_missing_timestamps(df, config)
-    if config.check_oob and polygon is not None:
-        df = categorize_oob(df, polygon)
-        df = inspect_gps_ootb(df, config, route)
-    df = df.sort_values("timestamp", kind="stable")  # trips must be time-ordered
-    df = detect_gaps(df, config)
-    df = assign_match_segments(df, config)
+    df = prepare_for_matching(trip_df, config, route=route, polygon=polygon)
 
     seg_pairs = _match_usable_segments(
         df, index, config, dist_cache, trace_sink=trace_sink, route_edges=route_edges

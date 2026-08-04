@@ -7,65 +7,160 @@ import numpy as np
 import pandas as pd
 
 from .config import MatchConfig
+from .gaps import assign_gaps_and_segments
 from .route import Route1D, project_lonlat_to_route
 
 
+# Why a timestamp was rejected. Recorded rather than discarded so a row that
+# is later back-filled by infer_missing_timestamps still says what was wrong
+# with the original reading, and so scripts/make_trip_data.py can quarantine
+# rejected rows with an explanation instead of a bare count.
+TS_UNPARSEABLE = "unparseable"
+TS_FILENAME_MISMATCH = "filename_mismatch"
+TS_ABSOLUTE_WINDOW = "absolute_window"
+TS_MAD_OUTLIER = "mad_outlier"
+TS_NON_MONOTONIC = "non_monotonic"
+
+# Column carrying the reason, and the pre-cleaned timestamp columns that
+# sessions.clean_recording writes. When these are present on an input frame,
+# clean_gps_dataframe consumes them instead of re-deriving them — the
+# per-recording pass had strictly more evidence (device emit order, one
+# session's own spread, the recording filename) than a per-trip pass can have.
+TS_REASON_COL = "ts_reject_reason"
+TS_CLEAN_COL = "ts_clean"
+TS_VALID_COL = "ts_valid"
+TS_INFERRED_COL = "ts_inferred"
+
+
 def _absolute_range_mask(ts: pd.Series, config: MatchConfig) -> pd.Series:
-    """True where ts falls outside the configured plausible capture window."""
+    """True where ts falls outside the plausible capture window.
+
+    The upper bound is the current time rather than a constant: a recording
+    cannot have been captured in the future, so this needs no maintenance and
+    cannot silently expire the way a hardcoded max date does — that is exactly
+    how a stale valid_timestamp_max came to reject every timestamp of every
+    recording captured after it. config.max_future_skew_h leaves room for a
+    device clock running slightly fast.
+    """
     mask = pd.Series(False, index=ts.index)
     if config.valid_timestamp_min is not None:
         mask |= ts < pd.Timestamp(config.valid_timestamp_min, tz="UTC")
-    if config.valid_timestamp_max is not None:
-        mask |= ts > pd.Timestamp(config.valid_timestamp_max, tz="UTC")
-    return mask
+    upper = (
+        pd.Timestamp(config.valid_timestamp_max, tz="UTC")
+        if config.valid_timestamp_max is not None
+        else pd.Timestamp.now(tz="UTC") + pd.Timedelta(hours=config.max_future_skew_h)
+    )
+    return mask | (ts > upper)
 
 
-def _detect_timestamp_outliers(df: pd.DataFrame, config: MatchConfig) -> pd.Series:
-    """Boolean Series (index-aligned): True where the parsed timestamp is
-    inconsistent with the rest of the file's own recording, regardless of
-    whether it parsed successfully.
+def flag_timestamp_outliers(
+    ts: pd.Series, config: MatchConfig, anchor: pd.Timestamp | None = None
+) -> pd.Series:
+    """Why each timestamp is untrustworthy, or pd.NA where it looks fine.
 
-    Runs three stages, each operating only on rows not already flagged:
-      0. Absolute plausible-capture-window bound (config.valid_timestamp_*).
-      1. Robust median/MAD range check, catching in-window anomalies (e.g. a
-         stale clock reading hours before the recording actually started)
-         without false-flagging the edges of a long-but-legitimate recording,
-         since the tolerance scales with the file's own spread.
-      2. Forward monotonicity pass in row order, catching subtler
-         out-of-order rows that survive the statistical checks.
+    Index-aligned object Series of TS_* reason codes. Operates on an already
+    parsed timestamp Series so both the per-recording pass (sessions.py) and
+    the per-trip fallback (clean_gps_dataframe) share one implementation.
+
+    Runs four stages, each seeing only the previous stage's survivors, so the
+    reason recorded is the first — most specific — thing found wrong:
+
+      0a. Distance from `anchor`, the capture time declared by the recording's
+          own filename — but only when the file's own median timestamp
+          corroborates it. When the two agree, the filename is the sharpest
+          absolute check available, because it is written once the device
+          closes the file and its clock has synced, while the rows it catches
+          were logged before that. When they disagree wholesale the filename
+          is the unreliable one: some exports are named for the day they were
+          downloaded rather than the day they were recorded, and trusting the
+          name there would reject an entire good recording. Corroboration
+          distinguishes the two — a warm-up block is a minority of rows
+          disagreeing with a filename the bulk agrees with. Only available per
+          raw recording, hence the optional argument.
+      0b. Absolute plausible-capture-window bound (config.valid_timestamp_*,
+          plus "not in the future"), a backstop for recordings with no usable
+          anchor.
+      1.  Robust median/MAD range check, catching in-window anomalies (e.g. a
+          stale clock reading hours before the recording actually started)
+          without false-flagging the edges of a long-but-legitimate recording,
+          since the tolerance scales with the recording's own spread.
+      2.  Forward monotonicity pass in row order, catching subtler out-of-order
+          rows that survive the statistical checks. This one is only meaningful
+          while the rows are still in device emit order — run it on a frame
+          that has been sorted by timestamp and it can never fire.
     """
-    flagged = pd.Series(False, index=df.index)
+    reason = pd.Series(pd.NA, index=ts.index, dtype="object")
+    reason[ts.isna()] = TS_UNPARSEABLE
     if not config.detect_timestamp_outliers:
-        return flagged
+        return reason
 
-    parsed = df["timestamp"].notna()
+    parsed = ts.notna()
+    tolerance = pd.Timedelta(hours=config.recording_date_tolerance_h)
 
-    # Stage 0: absolute capture-window bound.
-    flagged.loc[parsed] = _absolute_range_mask(df.loc[parsed, "timestamp"], config)
+    # Stage 0a: distance from the filename's declared capture time, if the
+    # file's own centre backs that time up (see docstring).
+    if anchor is not None and parsed.any():
+        corroborated = abs(ts[parsed].median() - anchor) <= tolerance
+        if corroborated:
+            off_anchor = (ts[parsed] - anchor).abs() > tolerance
+            reason.loc[off_anchor.index[off_anchor.to_numpy()]] = TS_FILENAME_MISMATCH
 
-    candidate_idx = df.index[parsed & ~flagged]
+    # Stage 0b: absolute capture-window bound.
+    survivors = parsed & reason.isna()
+    out_of_window = _absolute_range_mask(ts[survivors], config)
+    reason.loc[out_of_window.index[out_of_window.to_numpy()]] = TS_ABSOLUTE_WINDOW
+
+    candidate_idx = ts.index[parsed & reason.isna()]
     if len(candidate_idx) < config.min_timestamps_for_sequentiality_check:
-        return flagged
+        return reason
 
     # Stage 1: robust median/MAD range check among Stage-0 survivors.
-    ts = df.loc[candidate_idx, "timestamp"]
-    epoch_s = ts.astype("int64") / 1e9
+    kept = ts.loc[candidate_idx]
+    epoch_s = kept.astype("int64") / 1e9
     median_s = np.median(epoch_s)
     mad_s = np.median(np.abs(epoch_s - median_s))
     tolerance_s = 1.4826 * mad_s * config.timestamp_outlier_mad_k
-    stage1_outlier = (epoch_s < median_s - tolerance_s) | (epoch_s > median_s + tolerance_s)
-    flagged.loc[ts.index[stage1_outlier.values]] = True
+    mad_outlier = (epoch_s < median_s - tolerance_s) | (epoch_s > median_s + tolerance_s)
+    reason.loc[kept.index[mad_outlier.to_numpy()]] = TS_MAD_OUTLIER
 
     # Stage 2: forward monotonicity pass over remaining survivors, in row order.
     running_max = None
-    for idx in df.index[parsed & ~flagged]:
-        t = df.at[idx, "timestamp"]
+    for idx in ts.index[parsed & reason.isna()]:
+        t = ts.at[idx]
         if running_max is not None and t < running_max:
-            flagged.at[idx] = True
+            reason.at[idx] = TS_NON_MONOTONIC
         else:
             running_max = t
 
-    return flagged
+    return reason
+
+
+def finalize_usable_for_hmm(df: pd.DataFrame) -> pd.DataFrame:
+    """Recompute usable_for_hmm from every validity flag currently on `df`.
+
+    The single definition of "this row can drive the HMM". Deliberately
+    derived from whichever optional flags are present rather than from a fixed
+    formula, because the flags become available at different pipeline stages:
+    out_of_bounds / out_of_time_bounds need the inferred route, which only
+    exists after scripts/infer_route.py has run, and gps_inside_polygon needs
+    the bairro boundary. Recomputing from scratch each time makes this
+    idempotent, so it is safe (and intended) to call again as each new flag
+    lands — see cleaning.prepare_for_matching.
+
+    Callers must run gap/segment assignment *after* this, never before: both
+    are derived from the usable set, so a segment_id computed against a larger
+    usable set is stale.
+    """
+    df = df.copy()
+    usable = df["gps_valid"] & df["timestamp_valid"]
+    if "out_of_bounds" in df.columns:
+        usable &= ~df["out_of_bounds"].fillna(False).astype(bool)
+    if "out_of_time_bounds" in df.columns:
+        usable &= ~df["out_of_time_bounds"].fillna(True).astype(bool)
+    if "gps_inside_polygon" in df.columns:
+        usable &= df["gps_inside_polygon"].fillna(False).astype(bool)
+    df["usable_for_hmm"] = usable
+    return df
 
 
 def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
@@ -82,8 +177,18 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     lat                 : float or NaN.
     timestamp_valid     : bool – timestamp was successfully parsed.
     gps_valid           : bool – lon/lat are numeric and non-zero (if configured).
-    usable_for_hmm      : bool = timestamp_valid & gps_valid.
-    timestamp_inferred  : bool – False here; set by infer_missing_timestamps().
+    usable_for_hmm      : bool – see finalize_usable_for_hmm().
+    timestamp_inferred  : bool – whether the timestamp was back-filled.
+    ts_reject_reason    : str | NA – why the raw timestamp was rejected.
+
+    If the frame already carries the ts_clean / ts_valid / ts_inferred columns
+    that sessions.clean_recording writes (i.e. it came out of
+    scripts/make_trip_data.py), those are used as-is and no timestamp checking
+    is repeated here: that pass ran per raw recording, where it could see the
+    device's emit order, a single session's own spread, and the recording
+    filename's declared capture time. A per-trip repeat would have strictly
+    less evidence and would re-derive the same answer. Frames without them
+    (standalone library use, tests) get the checks applied here instead.
     """
     df = df.copy()
 
@@ -95,13 +200,21 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     df["lon_raw"] = df[config.lon_col]
     df["lat_raw"] = df[config.lat_col]
 
-    # --- Parse timestamp ---------------------------------------------------
-    df["timestamp"] = pd.to_datetime(
-        df[config.timestamp_col], errors="coerce", utc=True, format="mixed"
-    )
-
-    outlier_mask = _detect_timestamp_outliers(df, config)
-    df.loc[outlier_mask, "timestamp"] = pd.NaT
+    # --- Timestamp: adopt the per-recording pass, or run it here -----------
+    if TS_CLEAN_COL in df.columns:
+        df["timestamp"] = pd.to_datetime(df[TS_CLEAN_COL], errors="coerce", utc=True)
+        df["timestamp_inferred"] = df.get(
+            TS_INFERRED_COL, pd.Series(False, index=df.index)
+        ).fillna(False).astype(bool)
+        if TS_REASON_COL not in df.columns:
+            df[TS_REASON_COL] = pd.NA
+    else:
+        df["timestamp"] = pd.to_datetime(
+            df[config.timestamp_col], errors="coerce", utc=True, format="mixed"
+        )
+        df[TS_REASON_COL] = flag_timestamp_outliers(df["timestamp"], config)
+        df.loc[df[TS_REASON_COL].notna(), "timestamp"] = pd.NaT
+        df["timestamp_inferred"] = False
 
     df["timestamp_valid"] = df["timestamp"].notna()
 
@@ -122,13 +235,9 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     else:
         gps_valid = lon_ok & lat_ok
 
-    
-
     df["gps_valid"] = gps_valid
-    df["usable_for_hmm"] = df["timestamp_valid"] & df["gps_valid"]
-    df["timestamp_inferred"] = False
 
-    return df
+    return finalize_usable_for_hmm(df)
 
 
 def inspect_gps_oob(
@@ -242,12 +351,8 @@ def inspect_gps_ootb(
     out_of_time_bounds : bool – True when the row's timestamp falls outside
                           the derived window (or the timestamp itself is
                           invalid). False for rows inside the window.
-    usable_for_hmm      : bool – recomputed as
-                          gps_valid & timestamp_valid & ~out_of_bounds &
-                          ~out_of_time_bounds. This is the final,
-                          authoritative value (overwrites the simpler
-                          version set by clean_gps_dataframe /
-                          infer_missing_timestamps).
+    usable_for_hmm      : bool – refreshed via finalize_usable_for_hmm now
+                          that out_of_time_bounds exists.
     """
     if "out_of_bounds" not in df.columns:
         df = inspect_gps_oob(df, config, route)
@@ -270,23 +375,29 @@ def inspect_gps_ootb(
     else:
         df["out_of_time_bounds"] = True
 
-    df["usable_for_hmm"] = (
-        df["gps_valid"]
-        & df["timestamp_valid"]
-        & ~df["out_of_bounds"]
-        & ~df["out_of_time_bounds"]
-    )
-    return df
+    return finalize_usable_for_hmm(df)
 
 
 def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     """Fill in missing timestamps using a fixed or estimated sample interval.
 
     Only runs if config.infer_missing_timestamps is True. Inferred timestamps
-    are created by linearly interpolating (or extrapolating) between the nearest
-    valid timestamps using the interval dt. Rows with inferred timestamps get
+    are created by linearly interpolating between the nearest valid timestamps
+    using the interval dt. Rows with inferred timestamps get
     timestamp_inferred=True and timestamp_valid=True so they can be used by the
-    interpolation step (though NOT for HMM – usable_for_hmm requires gps_valid).
+    interpolation step (though not automatically for HMM – that still requires
+    gps_valid to be true, which is checked later by finalize_usable_for_hmm).
+
+    Rows with no valid timestamp on one side are only filled when
+    config.extrapolate_missing_timestamps is set; see that field for why the
+    default is off.
+
+    PRECONDITION: rows must be in acquisition order. Bracketing is positional
+    (a missing row's timestamp is prev_ts + steps * interval), so this cannot
+    run after a sort that moves rows relative to their sample sequence — and
+    conversely, sorting by timestamp before this runs would strand every NaT
+    row at the end of the frame. In the assembled pipeline that ordering comes
+    for free: this runs per raw recording, in device emit order.
 
     The sample interval is taken from config.expected_sample_interval_s when
     provided; otherwise it is estimated as the median dt between consecutive
@@ -328,6 +439,8 @@ def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
             next_pos, next_ts = after[0]
             steps_from_prev = i - prev_pos
             inferred = prev_ts + pd.Timedelta(seconds=steps_from_prev * interval_s)
+        elif not config.extrapolate_missing_timestamps:
+            continue  # unbracketed: leave it missing rather than invent a time
         elif before:
             prev_pos, prev_ts = before[-1]
             inferred = prev_ts + pd.Timedelta(seconds=(i - prev_pos) * interval_s)
@@ -340,5 +453,55 @@ def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
         df.at[i, "timestamp_inferred"] = True
 
     # Re-evaluate usable_for_hmm (inferred timestamps don't make GPS valid)
-    df["usable_for_hmm"] = df["timestamp_valid"] & df["gps_valid"]
-    return df
+    return finalize_usable_for_hmm(df)
+
+
+def prepare_for_matching(
+    df: pd.DataFrame,
+    config: MatchConfig,
+    route: Route1D | None = None,
+    polygon=None,
+) -> pd.DataFrame:
+    """Take a raw or partly-cleaned trip frame to the state both matchers need.
+
+    The single cleaning sequence in the codebase. netmatch.match_trip_to_network
+    (route inference), netmatch.match_trip_to_network_rows (map matching) and
+    pipeline.match_gps_to_route all call this, so the only thing that can
+    differ between them is what evidence they have available — expressed as
+    arguments, not as three hand-maintained call orders that drift apart:
+
+      route    the trip's inferred route (routes/Inferred_Route_*.gpx). Absent
+               during route inference, because the route is that stage's own
+               output; passing None simply skips the checks that need it,
+               rather than crashing partway through them.
+      polygon  the bairro boundary. Points outside it can't be on the route
+               network that was built from it.
+
+    Order, and why:
+
+      1. clean_gps_dataframe   parse + GPS validity. Adopts the per-recording
+                               timestamp verdicts when they're on the frame.
+      2. infer_missing_ts      positional bracketing, so it must precede the
+                               chronological sort in step 6 (see its docstring).
+      3. spatial checks        polygon membership and route-buffer distance.
+                               Both are purely geometric — neither needs a
+                               timestamp — so they belong together rather than
+                               split apart by unrelated steps.
+      4. temporal check        the walk's own time window, which needs step 3's
+                               out_of_bounds to pick its anchors.
+      5. finalize_usable       one formula, once, now that every flag exists.
+      6. sort by timestamp     matching is a time-ordered problem from here on.
+      7. gaps + segments       derived from the usable set, so strictly after 5.
+    """
+    df = clean_gps_dataframe(df, config)
+    df = infer_missing_timestamps(df, config)
+
+    if polygon is not None:
+        df = categorize_oob(df, polygon)
+    if route is not None:
+        df = inspect_gps_oob(df, config, route)
+        df = inspect_gps_ootb(df, config, route)
+
+    df = finalize_usable_for_hmm(df)
+    df = df.sort_values("timestamp", kind="stable")
+    return assign_gaps_and_segments(df, config)

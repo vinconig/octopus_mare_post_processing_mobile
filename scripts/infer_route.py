@@ -100,7 +100,10 @@ def infer_route(
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
     print("2/6 Loading trips and preprocessing data …")
-    tracks = _load_all_tracks(polygon, folders=folders)
+    # Trips arrive already carrying their cleaning flags from
+    # scripts/prepare_trips.py; the matcher adds only what needs a route,
+    # which is precisely what this stage is about to produce.
+    tracks = _load_all_tracks(folders=folders)
     trip_ids = tracks["track_id"].unique()
     if max_trips:
         trip_ids = trip_ids[:max_trips]
@@ -109,7 +112,7 @@ def infer_route(
 
     print("3/6 Matching trips to the road network …")
     index = build_graph_index(graph)
-    results = match_all_trips(tracks, index, match_cfg)
+    results = match_all_trips(tracks, index, match_cfg, polygon=polygon)
     matched = [r for r in results if r.edge_sequence]
     print(f"    matched {len(matched)}/{len(results)} trips "
           f"({sum(r.n_bridged_gaps for r in results)} gaps bridged, "

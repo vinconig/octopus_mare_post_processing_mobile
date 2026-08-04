@@ -7,9 +7,11 @@ from shapely.geometry import Polygon
 from gps_route_matcher.cleaning import (
     categorize_oob,
     clean_gps_dataframe,
+    finalize_usable_for_hmm,
     infer_missing_timestamps,
     inspect_gps_oob,
     inspect_gps_ootb,
+    prepare_for_matching,
 )
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.route import build_route_1d
@@ -334,3 +336,101 @@ def test_inspect_gps_ootb_no_anchor_marks_everything_out_of_time_bounds():
 
     assert out["out_of_time_bounds"].all()
     assert not out["usable_for_hmm"].any()
+
+
+# ── finalize_usable_for_hmm ──────────────────────────────────────────────────
+
+
+def _one_good_row():
+    df = _make_df([{"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -22.0}])
+    return clean_gps_dataframe(df, MatchConfig())
+
+
+def test_finalize_usable_for_hmm_folds_in_only_the_flags_present():
+    base = _one_good_row()
+    assert bool(finalize_usable_for_hmm(base)["usable_for_hmm"].iloc[0]) is True
+
+    for col, bad_value in (
+        ("out_of_bounds", True),
+        ("out_of_time_bounds", True),
+        ("gps_inside_polygon", False),
+    ):
+        df = base.copy()
+        df[col] = bad_value
+        out = finalize_usable_for_hmm(df)
+        assert bool(out["usable_for_hmm"].iloc[0]) is False, col
+
+
+def test_finalize_usable_for_hmm_is_idempotent():
+    df = _one_good_row()
+    df["out_of_bounds"] = False
+    once = finalize_usable_for_hmm(df)
+    twice = finalize_usable_for_hmm(once)
+    assert list(once["usable_for_hmm"]) == list(twice["usable_for_hmm"])
+
+
+def test_out_of_bounds_is_folded_in_without_a_polygon():
+    # Used to be silently skipped: out_of_bounds was computed but only ever
+    # reached usable_for_hmm through inspect_gps_ootb, which needed a polygon,
+    # so a caller with a route and no polygon still matched off-route points.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -22.0},
+        {"timestamp": "2026-01-01 00:05:00", "lon": -42.9, "lat": -22.0},
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0)
+    out = prepare_for_matching(df, cfg, route=_ROUTE)
+
+    assert list(out["out_of_bounds"]) == [False, True]
+    assert list(out["usable_for_hmm"]) == [True, False]
+
+
+# ── prepare_for_matching ─────────────────────────────────────────────────────
+
+
+def test_prepare_for_matching_without_a_route_skips_route_checks():
+    # scripts/infer_route.py's case, and the one that used to raise
+    # AttributeError partway through inspect_gps_oob when no GPX existed yet.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -22.0},
+        {"timestamp": "2026-01-01 00:00:05", "lon": -43.0, "lat": -22.0},
+    ])
+    out = prepare_for_matching(df, MatchConfig(), route=None)
+
+    assert "out_of_bounds" not in out.columns
+    assert "out_of_time_bounds" not in out.columns
+    assert out["usable_for_hmm"].all()
+
+
+def test_prepare_for_matching_assigns_gaps_and_segments_last():
+    # The two on-route fixes sit at different arc-lengths along _ROUTE so the
+    # derived walk window actually spans them.
+    df = _make_df([
+        {"timestamp": "2026-01-01 00:00:00", "lon": -43.0, "lat": -22.0},
+        {"timestamp": "2026-01-01 00:00:05", "lon": -42.9, "lat": -22.0},  # off-route
+        {"timestamp": "2026-01-01 00:00:10", "lon": -43.0, "lat": -21.9995},
+    ])
+    cfg = MatchConfig(oob_buffer_m=20.0, max_bridge_gap_s=90.0)
+    out = prepare_for_matching(df, cfg, route=_ROUTE)
+
+    # The off-route row is excluded from usable_for_hmm, so dt_s must be
+    # measured across it (10 s), not to it — which only holds if gap
+    # assignment ran after usable_for_hmm was final.
+    assert list(out["usable_for_hmm"]) == [True, False, True]
+    assert out["dt_s"].iloc[2] == 10.0
+
+
+def test_prepare_for_matching_adopts_precleaned_timestamps():
+    # A frame coming out of scripts/make_trip_data.py already carries the
+    # per-recording verdicts; the per-trip pass must not second-guess them.
+    df = _make_df([
+        {"timestamp": "2015-10-19 12:23:23", "lon": -43.0, "lat": -22.0},
+        {"timestamp": "2015-10-19 12:23:28", "lon": -43.0, "lat": -22.0},
+    ])
+    df["ts_clean"] = ["2026-01-01 00:00:00+00:00", "2026-01-01 00:00:05+00:00"]
+    df["ts_valid"] = True
+    df["ts_inferred"] = [False, True]
+
+    out = prepare_for_matching(df, MatchConfig())
+    assert out["timestamp_valid"].all()
+    assert out["timestamp"].iloc[0] == pd.Timestamp("2026-01-01 00:00:00", tz="UTC")
+    assert list(out["timestamp_inferred"]) == [False, True]

@@ -86,6 +86,15 @@ class MatchConfig:
     # ── Timestamp inference ─────────────────────────────────────────────────
     expected_sample_interval_s: float | None = None
     infer_missing_timestamps: bool = True
+    # Whether a row with no timestamp may be filled by extrapolating past the
+    # first/last valid timestamp of its recording, or only by interpolating
+    # between two valid ones. Off by default: the rows before a recording's
+    # first valid timestamp are the device's pre-RTC-sync warm-up block, which
+    # has no GPS fix either (97% of them are (0,0)), so extrapolating backwards
+    # only invents trip membership for rows recorded before the walk began.
+    # Interior dropouts, by contrast, are bracketed on both sides and do carry
+    # real sensor readings worth recovering.
+    extrapolate_missing_timestamps: bool = False
 
     # ── Gap / segment handling ──────────────────────────────────────────────
     max_bridge_gap_s: float = 90.0     # gaps ≤ this are bridged within one segment
@@ -117,12 +126,58 @@ class MatchConfig:
 
     # ── Cleaning ────────────────────────────────────────────────────────────
     treat_zero_zero_as_missing: bool = True
-    check_oob: bool = True    # run inspect_gps_oob (+ categorize_oob/inspect_gps_ootb if polygon given)
+    # Which checks run is decided by what the caller passes to
+    # cleaning.prepare_for_matching, not by a flag: a `route` enables the
+    # route-buffer and walk-time-window checks, a `polygon` enables the
+    # bairro-membership check. (There used to be a single check_oob flag
+    # gating all three; it conflated concerns that become available at
+    # different pipeline stages — the route only exists after infer_route —
+    # and made check_oob=True with route=None crash.)
     oob_buffer_m: float = 35.0  # max distance from the inferred route before out_of_bounds is set
 
     # ── Timestamp sequentiality / outlier detection ──────────────────────────
+    # Primary anchor is each raw recording's own filename (sessions.py), which
+    # encodes the true capture date/hour and is written at export time — after
+    # the RTC has synced — while the bad rows are logged before it. The
+    # absolute window below is only a loose outer backstop for recordings whose
+    # filename doesn't parse; it is deliberately not a tight, hand-maintained
+    # range (valid_timestamp_max used to be, and silently expired, rejecting
+    # every timestamp of every recording captured after it).
     detect_timestamp_outliers: bool = True
-    valid_timestamp_min: str | None = "2025-09-01"
-    valid_timestamp_max: str | None = "2026-08-01"
+    valid_timestamp_min: str | None = "2025-01-01"
+    # None means "now + max_future_skew_h" — a recording cannot have been
+    # captured in the future, and a bound derived at runtime cannot expire.
+    valid_timestamp_max: str | None = None
+    max_future_skew_h: float = 24.0
     timestamp_outlier_mad_k: float = 3.0
     min_timestamps_for_sequentiality_check: int = 5
+    # How far a row's timestamp may sit from its recording filename's declared
+    # capture time before it's flagged, and how far the file's own median may
+    # sit from it before the filename stops being trusted as an anchor at all
+    # (some exports are named for the day they were downloaded). Generous: the
+    # filename carries a whole hour, not a minute, and a recording can
+    # legitimately run long.
+    recording_date_tolerance_h: float = 12.0
+
+    # ── Trip assembly (sessions.py, scripts/make_trip_data.py) ──────────────
+    # A walk is a contiguous run of samples, so trips are cut on time gaps and
+    # only then labelled by their own start hour. Labelling per row instead
+    # would split a single walk that happens to cross a window edge.
+    session_split_gap_s: float = 1800.0   # 30 min of silence ends a session
+    # A walk also ends when the walking stops, which silence alone doesn't
+    # capture: a device left running between the morning and evening walk
+    # never goes quiet, so gap-cutting alone returns both walks and the four
+    # idle hours between them as one session. Samples that stay within
+    # stationary_radius_m for longer than max_stationary_gap_s are idle time,
+    # not walk data — they end the session and are quarantined rather than
+    # attributed to a route. The radius is well above GPS jitter at rest; the
+    # duration is well above any pause taken mid-walk.
+    stationary_radius_m: float = 25.0
+    max_stationary_gap_s: float = 1200.0        # 20 min
+    # Backstop for what neither rule catches — a sensor in transit still moves
+    # continuously. Recorded walks run to ~75 min at the outside, so anything
+    # past a few hours is something else. (One real OM_2 session runs 33 h
+    # with its GPS wandering a 350 km box.)
+    max_session_duration_s: float = 10800.0     # 3 h
+    morning_hours: tuple[int, int] = (11, 14)   # [start, end) hour
+    evening_hours: tuple[int, int] = (17, 20)   # [start, end) hour
