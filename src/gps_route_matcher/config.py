@@ -144,10 +144,10 @@ class MatchConfig:
     # range (valid_timestamp_max used to be, and silently expired, rejecting
     # every timestamp of every recording captured after it).
     detect_timestamp_outliers: bool = True
-    valid_timestamp_min: str | None = "2025-01-01"
+    valid_timestamp_min: str | None = "2025-10-01"
     # None means "now + max_future_skew_h" — a recording cannot have been
     # captured in the future, and a bound derived at runtime cannot expire.
-    valid_timestamp_max: str | None = None
+    valid_timestamp_max: str | None = "2026-05-01"
     max_future_skew_h: float = 24.0
     timestamp_outlier_mad_k: float = 3.0
     min_timestamps_for_sequentiality_check: int = 5
