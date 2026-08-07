@@ -9,7 +9,7 @@ requires-python = ">=3.10"
 dependencies = ["pandas", "numpy", "shapely", "pyproj", "scipy", "gpxpy", "geopandas", "osmnx"]
 
 [project.optional-dependencies]
-viz = ["plotly"]
+viz = ["plotly", "matplotlib"]
 gdrive = ["google-api-python-client", "google-auth-httplib2", "google-auth-oauthlib"]
 dev = ["pytest"]
 
