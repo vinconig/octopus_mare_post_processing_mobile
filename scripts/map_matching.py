@@ -1,4 +1,5 @@
-"""Map-match every recorded GPS trip in data/OM_1..OM_4 onto the road network.
+"""Map-match every recorded GPS trip in data/OM_1_trips..OM_4_trips onto the
+road network.
 
 Per file: read raw CSV -> match_trip_to_network_rows (network HMM matching +
 timestamp inference + network-path-aware interpolation across gaps) -> write
@@ -6,7 +7,7 @@ the enriched CSV to a sibling data/<folder>_matched/ directory under the same
 filename. The road graph, GraphIndex, NetworkDistanceCache and inverse
 transformer are built once and reused across all files (same pattern as
 scripts/infer_route.py), and only the top-level CSVs directly inside each
-data/OM_n folder are processed — nested date/time subfolders hold stray
+data/OM_n_trips folder are processed — nested date/time subfolders hold stray
 non-standard leftovers, not raw CSVs, and are skipped entirely.
 """
 
@@ -28,7 +29,7 @@ from gps_route_matcher.netmatch import (
 from gps_route_matcher.paths import PROJECT_ROOT
 from gps_route_matcher.roadnet import get_road_graph
 from gps_route_matcher.route import build_route_1d
-from gps_route_matcher.visualization import _BAIRRO_KML_PATH, _TRACK_FOLDERS
+from gps_route_matcher.visualization import _BAIRRO_KML_PATH, _TRIP_TRACK_FOLDERS
 
 
 def _iter_csv_files(folder_path: Path) -> list[Path]:
@@ -45,8 +46,12 @@ def map_match(
     force_refresh: bool = False,
     overwrite: bool = True,
 ) -> None:
-    """Match every CSV in the given (or all) data/OM_n folders onto the road
-    network, writing enriched output to sibling data/OM_n_matched/ folders.
+    """Match every CSV in the given (or all) data/<folder> folders onto the road
+    network, writing enriched output to sibling data/<folder>_matched/ folders.
+
+    folders defaults to _TRIP_TRACK_FOLDERS (OM_1_trips..OM_4_trips), the
+    canonical trips folders prepare_trips.py writes and main.py passes — the
+    bare OM_1..OM_4 names have no data/ directory of their own.
 
     If overwrite is False, CSVs whose matched output already exists in
     data/<folder>_matched/ are skipped (counted as skipped, not processed),
@@ -63,7 +68,7 @@ def map_match(
     transformer_inv = pyproj.Transformer.from_crs(index.crs_metric, "EPSG:4326", always_xy=True)
     config = MatchConfig(infer_missing_timestamps=True)
 
-    target_folders = folders if folders else _TRACK_FOLDERS
+    target_folders = folders if folders else _TRIP_TRACK_FOLDERS
     print(f"3/4 Matching CSV files in {target_folders} …")
 
     status_counts: Counter = Counter()
@@ -137,8 +142,8 @@ def map_match(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--folders", nargs="+", default=None,
-                        help="Restrict to these data folders (e.g. OM_2). Default: all of "
-                             "OM_1..OM_4.")
+                        help="Restrict to these data folders (e.g. OM_2_trips). Default: all of "
+                             "OM_1_trips..OM_4_trips.")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Only match the first N CSV files per folder (for quick tests)")
     parser.add_argument("--force-refresh", action="store_true",

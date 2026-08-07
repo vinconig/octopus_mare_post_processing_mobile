@@ -1,5 +1,5 @@
-"""Aggregate every matched CSV in data/OM_1..OM_4_matched onto its route's
-inferred edge sequence.
+"""Aggregate every matched CSV in data/OM_1_trips_matched..OM_4_trips_matched
+onto its route's inferred edge sequence.
 
 Per file: read matched CSV -> gps_route_matcher.analysis.run_edge_analysis
 (restrict to points on the inferred route, aggregate per edge, reindex to
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from gps_route_matcher.analysis import load_route_metadata, run_edge_analysis, save_edge_analysis
 from gps_route_matcher.paths import PROJECT_ROOT
-from gps_route_matcher.visualization import _TRACK_FOLDERS
+from gps_route_matcher.visualization import _TRIP_TRACK_FOLDERS
 from map_matching import _iter_csv_files
 
 
@@ -27,14 +27,18 @@ def route_edge_analysis(
     max_files: int | None = None,
     overwrite: bool = True,
 ) -> None:
-    """Aggregate every matched CSV in the given (or all) data/OM_n_matched
+    """Aggregate every matched CSV in the given (or all) data/<folder>_matched
     folders onto its route's inferred edge sequence, writing one row per
-    route edge to sibling data/OM_n_edge_analysis/ folders.
+    route edge to sibling data/<folder>_edge_analysis/ folders.
+
+    folders defaults to _TRIP_TRACK_FOLDERS (OM_1_trips..OM_4_trips), which is
+    what map_matching.py actually writes and what main.py passes — the bare
+    OM_1..OM_4 names have no data/ directory of their own.
 
     If overwrite is False, CSVs whose edge-analysis output already exists are
     skipped, so a second run only fills in files that are missing or new.
     """
-    target_folders = folders if folders else _TRACK_FOLDERS
+    target_folders = folders if folders else _TRIP_TRACK_FOLDERS
     print(f"1/2 Processing matched CSVs in {target_folders} …")
 
     n_files_processed = 0
@@ -87,8 +91,8 @@ def route_edge_analysis(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--folders", nargs="+", default=None,
-                        help="Restrict to these data folders (e.g. OM_2). Default: all of "
-                             "OM_1..OM_4.")
+                        help="Restrict to these data folders (e.g. OM_2_trips). Default: all of "
+                             "OM_1_trips..OM_4_trips.")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Only process the first N CSV files per folder (for quick tests)")
     parser.add_argument("--no-overwrite", dest="overwrite", action="store_false",
