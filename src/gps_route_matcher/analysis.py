@@ -98,7 +98,10 @@ def assign_points_to_edges(trip_df: pd.DataFrame, route_metadata: dict) -> pd.Da
     ]
     df = df.dropna(subset=["edge_order"])
     df["edge_order"] = df["edge_order"].astype(int)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # format="ISO8601", not inference: interpolated timestamps carry fractional
+    # seconds while read ones don't, so a single guessed format fits only one
+    # of the two shapes present in the same column.
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
     return df
 
 

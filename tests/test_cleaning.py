@@ -194,6 +194,32 @@ def test_flagged_row_backfilled_by_infer_missing_timestamps():
     assert inferred["timestamp"].iloc[5] == expected
 
 
+def test_bracketed_fill_divides_span_not_nominal_interval():
+    """A gap whose span isn't a multiple of the interval still closes on it.
+
+    Rows 3-5 are missing and the surviving anchors are 17s apart, not the
+    nominal 5s x 4. Stepping at the interval would put row 5 past row 6.
+    """
+    rows = _sequential_rows(pd.Timestamp("2026-03-09 12:00:00", tz="UTC"), 8)
+    rows[6]["timestamp"] = (
+        pd.Timestamp("2026-03-09 12:00:10", tz="UTC") + pd.Timedelta(seconds=17)
+    ).isoformat()
+    rows[7]["timestamp"] = (
+        pd.Timestamp("2026-03-09 12:00:10", tz="UTC") + pd.Timedelta(seconds=22)
+    ).isoformat()
+    for i in (3, 4, 5):
+        rows[i]["timestamp"] = None
+    df = _make_df(rows)
+    cfg = MatchConfig(expected_sample_interval_s=5.0, infer_missing_timestamps=True)
+
+    out = infer_missing_timestamps(clean_gps_dataframe(df, cfg), cfg)
+
+    base = pd.Timestamp("2026-03-09 12:00:10", tz="UTC")  # row 2, last valid
+    step = pd.Timedelta(seconds=17 / 4)                   # span / rows spanned
+    assert list(out["timestamp"].iloc[3:6]) == [base + step * k for k in (1, 2, 3)]
+    assert out["timestamp"].is_monotonic_increasing
+
+
 # ── inspect_gps_oob / categorize_oob / inspect_gps_ootb ──────────────────────
 
 _ROUTE = build_route_1d([(-43.0, -22.0), (-43.0, -21.999)])  # short N-S line

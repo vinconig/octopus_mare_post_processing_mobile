@@ -202,7 +202,13 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
 
     # --- Timestamp: adopt the per-recording pass, or run it here -----------
     if TS_CLEAN_COL in df.columns:
-        df["timestamp"] = pd.to_datetime(df[TS_CLEAN_COL], errors="coerce", utc=True)
+        # Same reason as analysis.assign_points_to_edges: this column is read
+        # back from CSV and mixes interpolated timestamps (fractional seconds)
+        # with read ones (whole seconds). Inferring one format would silently
+        # coerce every row of the other shape to NaT.
+        df["timestamp"] = pd.to_datetime(
+            df[TS_CLEAN_COL], errors="coerce", utc=True, format="ISO8601"
+        )
         df["timestamp_inferred"] = df.get(
             TS_INFERRED_COL, pd.Series(False, index=df.index)
         ).fillna(False).astype(bool)
@@ -379,29 +385,36 @@ def inspect_gps_ootb(
 
 
 def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
-    """Fill in missing timestamps using a fixed or estimated sample interval.
+    """Fill in missing timestamps by interpolating between the valid ones.
 
-    Only runs if config.infer_missing_timestamps is True. Inferred timestamps
-    are created by linearly interpolating between the nearest valid timestamps
-    using the interval dt. Rows with inferred timestamps get
-    timestamp_inferred=True and timestamp_valid=True so they can be used by the
-    interpolation step (though not automatically for HMM – that still requires
-    gps_valid to be true, which is checked later by finalize_usable_for_hmm).
+    Only runs if config.infer_missing_timestamps is True. A missing row that is
+    bracketed by a valid timestamp on each side gets the two anchors' span
+    divided evenly over the rows between them, so the fill always closes
+    exactly on the next anchor. Dead-reckoning at a nominal sample interval
+    would not: the anchors' real span is rarely an exact multiple of it, so the
+    last filled row could overshoot next_ts and break the row order the
+    matcher's elapsed-time cost model depends on. Where the span *is* an exact
+    multiple, the two agree — that case needs no separate handling.
 
-    Rows with no valid timestamp on one side are only filled when
+    Rows with inferred timestamps get timestamp_inferred=True and
+    timestamp_valid=True so they can be used by the interpolation step (though
+    not automatically for HMM – that still requires gps_valid to be true, which
+    is checked later by finalize_usable_for_hmm).
+
+    Rows with no valid timestamp on one side have no span to divide, so they
+    fall back to stepping at a sample interval — taken from
+    config.expected_sample_interval_s when provided, otherwise estimated as the
+    median dt between consecutive valid timestamps. They are only filled when
     config.extrapolate_missing_timestamps is set; see that field for why the
     default is off.
 
     PRECONDITION: rows must be in acquisition order. Bracketing is positional
-    (a missing row's timestamp is prev_ts + steps * interval), so this cannot
-    run after a sort that moves rows relative to their sample sequence — and
-    conversely, sorting by timestamp before this runs would strand every NaT
-    row at the end of the frame. In the assembled pipeline that ordering comes
-    for free: this runs per raw recording, in device emit order.
-
-    The sample interval is taken from config.expected_sample_interval_s when
-    provided; otherwise it is estimated as the median dt between consecutive
-    valid timestamps.
+    (a missing row's timestamp comes from its position between the two nearest
+    valid rows), so this cannot run after a sort that moves rows relative to
+    their sample sequence — and conversely, sorting by timestamp before this
+    runs would strand every NaT row at the end of the frame. In the assembled
+    pipeline that ordering comes for free: this runs per raw recording, in
+    device emit order.
     """
     if not config.infer_missing_timestamps:
         return df
@@ -412,15 +425,16 @@ def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
     if valid_mask.sum() < 2:
         return df  # not enough anchor points
 
-    # Estimate interval if not provided
+    # Estimate the interval if not provided. Only the extrapolation branches
+    # below need it, so failing to estimate one leaves interval_s None rather
+    # than aborting the bracketed fills, which don't use it.
     interval_s = config.expected_sample_interval_s
     if interval_s is None:
         valid_ts = df.loc[valid_mask, "timestamp"].sort_values()
         diffs = valid_ts.diff().dropna().dt.total_seconds()
         positive_diffs = diffs[diffs > 0]
-        if positive_diffs.empty:
-            return df
-        interval_s = float(positive_diffs.median())
+        if not positive_diffs.empty:
+            interval_s = float(positive_diffs.median())
 
     invalid_idx = df.index[~valid_mask]
     if invalid_idx.empty:
@@ -429,17 +443,27 @@ def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
     valid_positions = df.index[valid_mask].tolist()
     valid_times = df.loc[valid_mask, "timestamp"].tolist()
 
+    # Adding a Timedelta yields a nanosecond-resolution Timestamp, which pandas
+    # refuses to write into a coarser column (the raw CSVs parse as
+    # datetime64[us]) unless the conversion is lossless. Round each inferred
+    # value to the column's own unit instead.
+    ts_unit = getattr(df["timestamp"].dtype, "unit", "ns")
+
     for i in invalid_idx:
         # Find bracketing valid timestamps by position
         before = [(pos, t) for pos, t in zip(valid_positions, valid_times) if pos < i]
         after = [(pos, t) for pos, t in zip(valid_positions, valid_times) if pos > i]
 
         if before and after:
+            # Divide the bracketed span evenly over the rows it spans rather
+            # than dead-reckoning at interval_s, which would only land on
+            # next_ts when the span happens to be an exact multiple of it.
             prev_pos, prev_ts = before[-1]
             next_pos, next_ts = after[0]
-            steps_from_prev = i - prev_pos
-            inferred = prev_ts + pd.Timedelta(seconds=steps_from_prev * interval_s)
-        elif not config.extrapolate_missing_timestamps:
+            span_s = (next_ts - prev_ts).total_seconds()
+            step_s = span_s / (next_pos - prev_pos)
+            inferred = prev_ts + pd.Timedelta(seconds=(i - prev_pos) * step_s)
+        elif not config.extrapolate_missing_timestamps or interval_s is None:
             continue  # unbracketed: leave it missing rather than invent a time
         elif before:
             prev_pos, prev_ts = before[-1]
@@ -448,7 +472,7 @@ def infer_missing_timestamps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
             next_pos, next_ts = after[0]
             inferred = next_ts - pd.Timedelta(seconds=(next_pos - i) * interval_s)
 
-        df.at[i, "timestamp"] = inferred
+        df.at[i, "timestamp"] = inferred.as_unit(ts_unit)
         df.at[i, "timestamp_valid"] = True
         df.at[i, "timestamp_inferred"] = True
 
