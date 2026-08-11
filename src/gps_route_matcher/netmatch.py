@@ -1056,33 +1056,26 @@ def match_trip_to_network_rows(
         after_mask = anchor_ns > row_ns
 
         if not before_mask.any() or not after_mask.any():
-            # Can't bracket – snap to nearest anchor if close enough in time
-            all_dts = np.abs((anchor_ns - row_ns) / 1e9)
-            nearest_i = int(np.argmin(all_dts))
-            if all_dts[nearest_i] > config.max_interpolation_gap_s:
-                df.at[idx, "match_status"] = "unresolved_large_gap"
-                continue
-            cand = link_by_oi[int(anchor_oi_arr[nearest_i])].cand
-            lon, lat = transformer_inv.transform(cand.x, cand.y)
-            df.at[idx, "matched_lon"] = lon
-            df.at[idx, "matched_lat"] = lat
-            df.at[idx, "group_id"] = g
-            df.at[idx, "path_m"] = anchor_path[nearest_i]
-            df.at[idx, "matched_edge_u"] = cand.edge[0]
-            df.at[idx, "matched_edge_v"] = cand.edge[1]
-            df.at[idx, "matched_edge_key"] = cand.edge[2]
-            df.at[idx, "interpolated"] = True
-            df.at[idx, "match_status"] = "interpolated"
+            # Can't bracket within this group — no extrapolation past a group
+            # boundary, and no snap to the nearest anchor either: that would
+            # be a guess at this row's position, not a measurement of it.
+            df.at[idx, "match_status"] = "unresolved_large_gap"
             continue
 
         prev_ns = int(anchor_ns[before_mask].max())
         next_ns = int(anchor_ns[after_mask].min())
         dt_before = (row_ns - prev_ns) / 1e9
         dt_after = (next_ns - row_ns) / 1e9
-        if (
-            dt_before > config.max_interpolation_gap_s
-            or dt_after > config.max_interpolation_gap_s
-        ):
+        # total_dt > 0 always: prev_ns and next_ns come from strict < / >
+        # masks against row_ns, so next_ns > prev_ns by construction.
+        total_dt = (next_ns - prev_ns) / 1e9
+        if total_dt > config.max_interpolation_gap_s:
+            # The real elapsed time between the two anchors bracketing this
+            # row — not just this row's distance to the nearer one — is what
+            # bounds confidence in the interpolated position. A per-side
+            # check alone would accept e.g. dt_before=dt_after=250s (500s
+            # total) inside a long bridged cross-segment gap, where nothing
+            # was actually observed for most of that span.
             df.at[idx, "match_status"] = "unresolved_large_gap"
             continue
 
@@ -1092,9 +1085,8 @@ def match_trip_to_network_rows(
         next_oi = int(anchor_oi_arr[next_pos])
         prev_path = float(anchor_path[prev_pos])
         next_path = float(anchor_path[next_pos])
-        total_dt = (next_ns - prev_ns) / 1e9
 
-        target_extra_m = 0.0 if total_dt <= 0 else (dt_before / total_dt) * (next_path - prev_path)
+        target_extra_m = (dt_before / total_dt) * (next_path - prev_path)
 
         prev_cand = link_by_oi[prev_oi].cand
         next_link = link_by_oi[next_oi]  # bridge_edges: prev anchor -> this anchor

@@ -5,6 +5,7 @@ import pandas as pd
 
 from gps_route_matcher.cleaning import (
     TS_CLEAN_COL,
+    TS_DUPLICATE_TIMESTAMP,
     TS_FILENAME_MISMATCH,
     TS_INFERRED_COL,
     TS_REASON_COL,
@@ -77,6 +78,66 @@ def test_monotonicity_fires_in_emit_order():
 
     assert out[TS_REASON_COL].iloc[5] == "non_monotonic"
     assert out[TS_REASON_COL].drop(index=5).isna().all()
+
+
+def test_duplicate_timestamp_run_flags_every_row_not_just_the_repeats():
+    # A device clock/GPS freeze repeats one reading across several consecutive
+    # rows while other channels keep updating. Nothing distinguishes which of
+    # the frozen rows (if any) carries the genuine timestamp, so all of them
+    # are flagged — not just the ones after the first.
+    rows = _rows(pd.Timestamp("2026-03-09 12:00:00"), 8)
+    rows[3]["Timestamp"] = rows[2]["Timestamp"]
+    rows[4]["Timestamp"] = rows[2]["Timestamp"]
+    out = clean_recording(_df(rows), STEM, MatchConfig())
+
+    assert list(out[TS_REASON_COL].iloc[2:5]) == [TS_DUPLICATE_TIMESTAMP] * 3
+    assert out[TS_REASON_COL].drop(index=[2, 3, 4]).isna().all()
+
+
+def test_duplicate_timestamp_pair_flags_both_rows():
+    rows = _rows(pd.Timestamp("2026-03-09 12:00:00"), 8)
+    rows[5]["Timestamp"] = rows[4]["Timestamp"]
+    out = clean_recording(_df(rows), STEM, MatchConfig())
+
+    assert out[TS_REASON_COL].iloc[4] == TS_DUPLICATE_TIMESTAMP
+    assert out[TS_REASON_COL].iloc[5] == TS_DUPLICATE_TIMESTAMP
+    assert out[TS_REASON_COL].drop(index=[4, 5]).isna().all()
+
+
+def test_duplicate_run_across_an_unparseable_row_is_still_flagged():
+    # "Consecutive" means consecutive among survivors, not by row index: an
+    # unparseable row physically between two equal timestamps must not hide
+    # the duplicate from either side of it.
+    rows = _rows(pd.Timestamp("2026-03-09 12:00:00"), 8)
+    rows[4]["Timestamp"] = "0.00"
+    rows[5]["Timestamp"] = rows[3]["Timestamp"]
+    out = clean_recording(_df(rows), STEM, MatchConfig())
+
+    assert out[TS_REASON_COL].iloc[3] == TS_DUPLICATE_TIMESTAMP
+    assert out[TS_REASON_COL].iloc[4] == TS_UNPARSEABLE
+    assert out[TS_REASON_COL].iloc[5] == TS_DUPLICATE_TIMESTAMP
+    assert out[TS_REASON_COL].drop(index=[3, 4, 5]).isna().all()
+
+
+def test_row_already_rejected_by_monotonicity_does_not_join_a_duplicate_run():
+    # A genuine backwards jump is rejected by Stage 2 before Stage 3 runs, so
+    # it must neither be pulled into a later duplicate run itself nor block
+    # detection of one on either side of it.
+    rows = _rows(pd.Timestamp("2026-03-09 12:00:00"), 9)
+    rows[3]["Timestamp"] = "2026-03-09 12:00:02"  # jumps backwards
+    rows[5]["Timestamp"] = rows[4]["Timestamp"]  # duplicate, unrelated to idx 3
+    out = clean_recording(_df(rows), STEM, MatchConfig())
+
+    assert out[TS_REASON_COL].iloc[3] == "non_monotonic"
+    assert out[TS_REASON_COL].iloc[4] == TS_DUPLICATE_TIMESTAMP
+    assert out[TS_REASON_COL].iloc[5] == TS_DUPLICATE_TIMESTAMP
+    assert out[TS_REASON_COL].drop(index=[3, 4, 5]).isna().all()
+
+
+def test_distinct_timestamps_are_unaffected_by_duplicate_check():
+    rows = _rows(pd.Timestamp("2026-03-09 12:00:00"), 8)
+    out = clean_recording(_df(rows), STEM, MatchConfig())
+    assert out[TS_REASON_COL].isna().all()
 
 
 def test_unparseable_timestamp_is_recorded_as_such():

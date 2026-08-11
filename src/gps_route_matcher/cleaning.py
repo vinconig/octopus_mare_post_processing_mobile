@@ -20,6 +20,7 @@ TS_FILENAME_MISMATCH = "filename_mismatch"
 TS_ABSOLUTE_WINDOW = "absolute_window"
 TS_MAD_OUTLIER = "mad_outlier"
 TS_NON_MONOTONIC = "non_monotonic"
+TS_DUPLICATE_TIMESTAMP = "duplicate_timestamp"
 
 # Column carrying the reason, and the pre-cleaned timestamp columns that
 # sessions.clean_recording writes. When these are present on an input frame,
@@ -62,7 +63,7 @@ def flag_timestamp_outliers(
     parsed timestamp Series so both the per-recording pass (sessions.py) and
     the per-trip fallback (clean_gps_dataframe) share one implementation.
 
-    Runs four stages, each seeing only the previous stage's survivors, so the
+    Runs five stages, each seeing only the previous stage's survivors, so the
     reason recorded is the first — most specific — thing found wrong:
 
       0a. Distance from `anchor`, the capture time declared by the recording's
@@ -88,6 +89,15 @@ def flag_timestamp_outliers(
           rows that survive the statistical checks. This one is only meaningful
           while the rows are still in device emit order — run it on a frame
           that has been sorted by timestamp and it can never fire.
+      3.  Duplicate-timestamp runs among Stage-2 survivors, in row order (same
+          emit-order requirement as Stage 2). A device clock/GPS freeze
+          repeats one reading across many consecutive rows while other
+          channels keep updating; every row in such a run is flagged, not
+          just the rows after the first, since nothing distinguishes which
+          single row (if any) in the run carries the genuine timestamp.
+          "Consecutive" means consecutive among this stage's survivors, not
+          consecutive by row index — an unparseable row between two equal
+          timestamps does not break the run.
     """
     reason = pd.Series(pd.NA, index=ts.index, dtype="object")
     reason[ts.isna()] = TS_UNPARSEABLE
@@ -131,6 +141,21 @@ def flag_timestamp_outliers(
             reason.at[idx] = TS_NON_MONOTONIC
         else:
             running_max = t
+
+    # Stage 3: duplicate-timestamp runs among Stage-2 survivors, in row order.
+    # "Consecutive" is among these survivors, not by row index, so a run of
+    # unparseable/already-rejected rows between two equal timestamps doesn't
+    # break it (see docstring).
+    survivor_idx = ts.index[parsed & reason.isna()]
+    if len(survivor_idx) >= 2:
+        values = ts.loc[survivor_idx].to_numpy()
+        is_new_run = np.empty(len(values), dtype=bool)
+        is_new_run[0] = True
+        is_new_run[1:] = values[1:] != values[:-1]
+        run_id = pd.Series(np.cumsum(is_new_run))
+        run_len = run_id.map(run_id.value_counts())
+        dup_mask = (run_len >= 2).to_numpy()
+        reason.loc[survivor_idx[dup_mask]] = TS_DUPLICATE_TIMESTAMP
 
     return reason
 

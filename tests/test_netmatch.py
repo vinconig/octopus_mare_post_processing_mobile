@@ -464,7 +464,13 @@ def test_rows_bridges_group_id_across_a_short_cross_segment_gap():
         _row(inv, 660040.0, 7470000.0, base + pd.Timedelta(seconds=420)),
     ]
     trip_df = pd.DataFrame(rows)
-    config = _base_config()  # default max_split_gap_s=300, max_gap_bridge_m=20
+    # Bridging (group_id merge) only needs max_gap_bridge_m/min_segment_points_
+    # to_bridge_gap and is independent of max_interpolation_gap_s. But since
+    # the row bracketing this gap spans the full 400s split, it needs a
+    # max_interpolation_gap_s that actually covers that total span — the
+    # default (300s) would leave it unresolved (see the test right below this
+    # one for that default-config case).
+    config = _base_config(max_interpolation_gap_s=500.0)
 
     result = match_trip_to_network_rows(trip_df, "t1", index, config)
 
@@ -474,6 +480,33 @@ def test_rows_bridges_group_id_across_a_short_cross_segment_gap():
     assert gap_row["match_status"] == "interpolated"
     assert gap_row["group_id"] == result.iloc[0]["group_id"]
     assert result.iloc[1]["path_m"] < gap_row["path_m"] < result.iloc[3]["path_m"]
+
+
+def test_rows_bridged_gap_row_unresolved_when_total_span_exceeds_cap_at_default_config():
+    """Same shape as the test above, but at default max_interpolation_gap_s
+    (300s). Bridging still succeeds (group_id merges), but the row inside the
+    gap sees dt_before=200s and dt_after=200s — each individually under 300s,
+    but summing to 400s of genuinely unobserved time. The old per-side check
+    would have accepted this; the sum-based check correctly does not."""
+    index, inv = _make_l_shaped_index()
+    base = pd.Timestamp("2026-01-01T12:00:00Z")
+    rows = [
+        _row(inv, 660010.0, 7470000.0, base),
+        _row(inv, 660020.0, 7470000.0, base + pd.Timedelta(seconds=10)),
+        {"Timestamp": base + pd.Timedelta(seconds=210), "Longitude": 0.0, "Latitude": 0.0},
+        _row(inv, 660025.0, 7470000.0, base + pd.Timedelta(seconds=410)),
+        _row(inv, 660040.0, 7470000.0, base + pd.Timedelta(seconds=420)),
+    ]
+    trip_df = pd.DataFrame(rows)
+    config = _base_config()  # default max_split_gap_s=300, max_interpolation_gap_s=300
+
+    result = match_trip_to_network_rows(trip_df, "t1b", index, config)
+
+    assert result.iloc[0]["group_id"] == result.iloc[3]["group_id"]  # bridging still succeeds
+    gap_row = result.iloc[2]
+    assert gap_row["match_status"] == "unresolved_large_gap"
+    assert pd.isna(gap_row["matched_lon"])
+    assert not gap_row["interpolated"]
 
 
 def test_rows_leaves_gap_unresolved_when_too_sparse_to_bridge():
@@ -495,6 +528,29 @@ def test_rows_leaves_gap_unresolved_when_too_sparse_to_bridge():
 
     assert result.iloc[0]["group_id"] != result.iloc[2]["group_id"]
     assert result.iloc[1]["match_status"] == "unresolved_large_gap"
+
+
+def test_rows_unbracketable_row_near_a_single_anchor_is_unresolved_not_snapped():
+    """A row close in time to the only anchor in its group, but with no
+    second anchor to bracket against, must not be pinned to that one
+    anchor's position — even though it's well within max_interpolation_gap_s."""
+    index, inv = _make_l_shaped_index()
+    base = pd.Timestamp("2026-01-01T12:00:00Z")
+    rows = [
+        _row(inv, 660010.0, 7470000.0, base),  # only anchor in this group
+        # 10s later, un-bracketable (no anchor after it reachable in-group).
+        {"Timestamp": base + pd.Timedelta(seconds=10), "Longitude": 0.0, "Latitude": 0.0},
+    ]
+    trip_df = pd.DataFrame(rows)
+    config = _base_config()
+
+    result = match_trip_to_network_rows(trip_df, "t2b", index, config)
+
+    row = result.iloc[1]
+    assert row["match_status"] == "unresolved_large_gap"
+    assert pd.isna(row["matched_lon"])
+    assert pd.isna(row["matched_lat"])
+    assert not row["interpolated"]
 
 
 def test_rows_all_gps_missing_no_exceptions():
