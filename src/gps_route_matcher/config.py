@@ -39,11 +39,11 @@ class MatchConfig:
     # through to the transition term, and spatially distinct fixes collapse onto
     # one coordinate. Candidate offsets are therefore clamped into
     # [inset, length - inset], so a candidate never sits on a node.
-    node_inset_m: float = 5.0
+    node_inset_m: float = 2.0
     # …but the inset never eats more than this share of a short edge, which keeps
     # the interval non-empty without special-casing (10% of the walk graph is
     # under 15 m, 2% under 5 m).
-    max_node_inset_fraction: float = 0.25
+    max_node_inset_fraction: float = 0.05
 
     # ── Along-edge candidate densification (network matcher only) ───────────
     # Edges belonging to the inferred route get several candidate positions
