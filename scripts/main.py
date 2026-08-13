@@ -1,11 +1,6 @@
-from gps_route_matcher.visualization import generate_interactive_map, generate_interactive_map_all_edge_data, generate_interactive_map_all_data_incl_edges
-from gps_route_matcher.visualization import generate_interactive_map_all_data, generate_hmm_debug_map
-from gps_route_matcher.visualization import generate_initial_map
-from gps_route_matcher.visualization import generate_tracks
-from gps_route_matcher.pipeline import *
+from gps_route_matcher.visualization import generate_interactive_map_all_data_incl_edges, generate_hmm_debug_map
 import os
 import webbrowser
-from gps_route_matcher import MatchConfig, match_gps_csv_to_route
 from gps_route_matcher.paths import PROJECT_ROOT
 import download_gdrive_data
 import infer_route
@@ -20,8 +15,8 @@ import prepare_trips
 
 if __name__ == "__main__":
     
-    #initial data download from google drive (only needs to be done once, commented out after first run)
-    #download_gdrive_data.download_om_folders(PROJECT_ROOT)
+    # #initial data download from google drive (only needs to be done once, commented out after first run)
+    # #download_gdrive_data.download_om_folders(PROJECT_ROOT)
 
     #make trip data from raw CSVs: validates each recording's timestamps first (per raw file,
     #while its emit order/filename/own spread are still available), then concatenates per sensor

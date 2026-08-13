@@ -191,10 +191,9 @@ def load_route_recordings(folder: str) -> pd.DataFrame:
     """Concatenate every edge-analysis CSV for one route
     (data/{folder}_edge_analysis/*.csv, as written by run_edge_analysis) into
     a single long DataFrame -- one row per (recording, edge) -- tagged with
-    recording_id/date/period/recid parsed from the filename, ready for
-    aggregate_across_recordings. Files that don't match the
-    TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv naming convention are
-    skipped, same as the interactive-map recording browser."""
+    recording_id/date/period/recid parsed from the filename. Files that don't
+    match the TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv naming
+    convention are skipped, same as the interactive-map recording browser."""
     in_dir = PROJECT_ROOT / "data" / f"{folder}_edge_analysis"
     frames = []
     for csv_path in sorted(in_dir.glob("*.csv")):
@@ -210,28 +209,3 @@ def load_route_recordings(folder: str) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
-
-
-def aggregate_across_recordings(long_df: pd.DataFrame) -> pd.DataFrame:
-    """Collapse a long (recording, edge) DataFrame (see load_route_recordings)
-    to one row per edge_order: every `_avg` column becomes the plain,
-    unweighted mean of that edge's per-recording averages. Recordings where
-    the edge had zero assigned points are already NaN there, so
-    groupby().mean() skips them on its own -- a 1-point recording counts the
-    same as a 50-point one otherwise. n_recordings counts how many
-    recordings had >=1 point on the edge; n_points_total sums n_points
-    across every recording (informational only, not used as a weight)."""
-    avg_cols = sorted(c for c in long_df.columns if c.endswith("_avg"))
-    grouped = long_df.groupby("edge_order", sort=True)
-
-    out = grouped[["u", "v", "key", "length", "geometry"]].first()
-    for col in avg_cols:
-        out[col] = grouped[col].mean()
-    out["n_recordings"] = (long_df["n_points"] > 0).groupby(long_df["edge_order"]).sum().astype(int)
-    out["n_points_total"] = grouped["n_points"].sum()
-
-    ordered_cols = [
-        "edge_order", "u", "v", "key", "length", "geometry",
-        *avg_cols, "n_recordings", "n_points_total",
-    ]
-    return out.reset_index()[ordered_cols].sort_values("edge_order").reset_index(drop=True)

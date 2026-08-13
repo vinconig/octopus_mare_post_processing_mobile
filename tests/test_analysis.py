@@ -5,7 +5,6 @@ import pandas as pd
 
 import gps_route_matcher.analysis as analysis_module
 from gps_route_matcher.analysis import (
-    aggregate_across_recordings,
     aggregate_by_edge,
     assemble_output,
     assign_points_to_edges,
@@ -113,53 +112,6 @@ def test_assemble_output_column_order_and_route_id():
     ]
     assert (out["route_id"] == "OM_1").all()
     assert len(out) == 3
-
-
-# ── cross-recording aggregation ───────────────────────────────────────────────
-
-def _long_recordings_df() -> pd.DataFrame:
-    """3 edges x 3 synthetic recordings (A, B, C), each missing exactly one
-    edge (n_points == 0, _avg == NaN there) so the unweighted-mean skip logic
-    is exercised for every edge."""
-    return pd.DataFrame({
-        "edge_order":      [0, 1, 2, 0, 1, 2, 0, 1, 2],
-        "u":                [1, 2, 3] * 3,
-        "v":                [2, 3, 4] * 3,
-        "key":              [0, 0, 0] * 3,
-        "length":           [10.0, 20.0, 30.0] * 3,
-        "geometry":         ["LINESTRING (0 0, 1 0)", "LINESTRING (1 0, 2 0)",
-                              "LINESTRING (2 0, 3 0)"] * 3,
-        "temperature_avg":  [20.0, 25.0, np.nan, 30.0, np.nan, 40.0, np.nan, 35.0, 50.0],
-        "humidity_avg":     [50.0, 55.0, np.nan, 60.0, np.nan, 70.0, np.nan, 65.0, 80.0],
-        "n_points":         [5, 3, 0, 1, 0, 2, 0, 4, 1],
-        "recording_id":     ["A", "A", "A", "B", "B", "B", "C", "C", "C"],
-    })
-
-
-def test_aggregate_across_recordings_computes_unweighted_mean_per_edge():
-    out = aggregate_across_recordings(_long_recordings_df())
-
-    assert list(out.columns) == [
-        "edge_order", "u", "v", "key", "length", "geometry",
-        "humidity_avg", "temperature_avg", "n_recordings", "n_points_total",
-    ]
-    assert list(out["edge_order"]) == [0, 1, 2]
-
-    edge0 = out[out["edge_order"] == 0].iloc[0]
-    assert edge0["temperature_avg"] == 25.0  # mean(20, 30) -- C's NaN skipped
-    assert edge0["humidity_avg"] == 55.0
-    assert edge0["n_recordings"] == 2
-    assert edge0["n_points_total"] == 6
-
-    edge1 = out[out["edge_order"] == 1].iloc[0]
-    assert edge1["temperature_avg"] == 30.0  # mean(25, 35) -- B's NaN skipped
-    assert edge1["n_recordings"] == 2
-    assert edge1["n_points_total"] == 7
-
-    edge2 = out[out["edge_order"] == 2].iloc[0]
-    assert edge2["temperature_avg"] == 45.0  # mean(40, 50) -- A's NaN skipped
-    assert edge2["n_recordings"] == 2
-    assert edge2["n_points_total"] == 3
 
 
 def test_load_route_recordings_concatenates_and_tags_files(tmp_path, monkeypatch):

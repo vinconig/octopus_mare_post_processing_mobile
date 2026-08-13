@@ -29,7 +29,6 @@ class MatchConfig:
     gps_sigma_m: float = 0.5
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
     candidate_k: int = 30               # max candidates per observation
-    deduplicate_s_tolerance_m: float = 5.0  # merge candidates this close in s
 
     # ── Node avoidance (network matcher only) ───────────────────────────────
     # Shapely's LineString.project() clamps to [0, length], so without an inset
@@ -116,9 +115,7 @@ class MatchConfig:
     # there's no single "forward" direction to check delta_s against.
     network_reversal_penalty: float = 10000.0
 
-    # ── HMM transition model ────────────────────────────────────────────────
-    allow_backward: bool = False
-    backward_penalty: float = 10000.0
+    # ── Transition speed penalty (network matcher) ───────────────────────────
     high_speed_penalty: float = 1000.0
 
     # ── Post-HMM interpolation ──────────────────────────────────────────────

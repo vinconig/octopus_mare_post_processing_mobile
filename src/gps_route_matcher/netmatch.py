@@ -1,24 +1,17 @@
 """HMM map matching of GPS trips onto a road network graph.
 
-This is the road-network counterpart of the single-route matcher in
-candidates.py / hmm.py. The observation cleaning and gap handling are reused
-from cleaning.py and gaps.py; what changes is the state space:
+States are (edge, offset) positions on any edge of a directed road graph.
+Observation cleaning and gap handling are reused from cleaning.py and gaps.py.
 
-  single-route matcher : states are positions s_m on ONE polyline.
-  network matcher      : states are (edge, offset) positions on ANY edge of
-                         a directed road graph.
-
-Emission model (unchanged in spirit from candidates.py):
+Emission model:
     emission_cost = perpendicular_distance² / (2 · gps_sigma²)
 
-Transition model (Newson–Krumm style, adapted from hmm.py):
+Transition model (Newson–Krumm style):
     The plausibility of moving between two candidate positions is judged by
     how much the network (routed) distance exceeds the straight-line distance
     between the two GPS fixes, plus a speed penalty using the real dt between
-    observations — exactly like hmm.py, but with network shortest-path
-    distance in place of the 1-D Δs along a single route. Large dt therefore
-    allows proportionally more distance without penalty, which is what makes
-    gap handling work.
+    observations. Large dt therefore allows proportionally more distance
+    without penalty, which is what makes gap handling work.
 
 Gap handling:
     Within a segment, consecutive observations are connected by the Viterbi
@@ -359,14 +352,14 @@ def network_transition_cost(
 ) -> float:
     """Cost of moving net_dist_m through the network in dt_s seconds.
 
-    Two additive terms, mirroring hmm.py's transition model:
+    Two additive terms:
 
     1. Detour term: |network distance − straight-line distance| between the
        GPS fixes (Newson–Krumm). A candidate pair whose routed distance far
        exceeds the direct displacement is an implausible match.
-    2. Speed term: identical to hmm.py — only speeds above max_speed_mps are
-       penalised, quadratically, so a large dt legitimately allows a large
-       distance (this is the whole point of using real dt in gaps).
+    2. Speed term: only speeds above max_speed_mps are penalised,
+       quadratically, so a large dt legitimately allows a large distance
+       (this is the whole point of using real dt in gaps).
     """
     if math.isinf(net_dist_m):
         return _LARGE_COST
@@ -419,7 +412,7 @@ def _viterbi_segment(
     segment_id: int = -1,
     trace_sink: list[CandidateTraceRow] | None = None,
 ) -> list[EdgeCandidate]:
-    """Minimum-cost candidate path for one segment (same algorithm as hmm.py).
+    """Minimum-cost candidate path for one segment (Viterbi/DP).
 
     If trace_sink is given, one CandidateTraceRow per (step, candidate) is
     appended to it as the DP runs, recording each candidate's emission cost,
@@ -795,7 +788,7 @@ def match_all_trips(
     return results
 
 
-# ── Per-row output (network counterpart of pipeline.match_gps_to_route) ───────
+# ── Per-row output ──────────────────────────────────────────────────────────
 
 
 def _walk_forward(
@@ -901,8 +894,7 @@ def match_trip_to_network_rows(
     route_edges: set[EdgeKey] | None = None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
-    enriched dataframe — the network-matcher counterpart of
-    gps_route_matcher.pipeline.match_gps_to_route.
+    enriched dataframe.
 
     Reuses _match_usable_segments / _link_segment_paths, so the set of
     traversed edges and bridge/leave-open decisions never diverges from
@@ -910,8 +902,7 @@ def match_trip_to_network_rows(
     infer_missing_timestamps and fills matched_lon/matched_lat for every row,
     interpolating across gaps that couldn't be matched directly by walking
     forward along the actual matched road path between the two bracketing
-    anchors (time-weighted, the network-path analogue of
-    interpolation.interpolate_missing_s's arc-length interpolation).
+    anchors (time-weighted, arc-length interpolation along the matched path).
 
     `route` is this trip's inferred route (routes/Inferred_Route_OM_x.gpx):
     points beyond config.oob_buffer_m from that line get out_of_bounds = True
@@ -929,8 +920,8 @@ def match_trip_to_network_rows(
     "unresolved_missing_time" | "unresolved_large_gap" |
     "unresolved_out_of_time_bounds" — the last is only possible when a route
     was given, since deriving the walk's time window needs one; such rows are
-    never interpolated regardless of gap size. Otherwise same vocabulary as
-    the single-track pipeline. Row order matches the input dataframe.
+    never interpolated regardless of gap size. Row order matches the input
+    dataframe.
 
     If `trace_sink` is given (an empty list), it is filled in place with one
     CandidateTraceRow per (observation, candidate) considered by the Viterbi
@@ -985,7 +976,7 @@ def match_trip_to_network_rows(
         seg_id_to_group.setdefault(seg_id, int(g))
         groups.setdefault(int(g), []).append(link.cand.obs_index)
 
-    # ── Initialize output columns (mirrors pipeline._merge_hmm_result) ────
+    # ── Initialize output columns ──────────────────────────────────────────
     n = len(df)
     df = df.copy()
     df["matched_lon"] = np.nan
@@ -1016,8 +1007,7 @@ def match_trip_to_network_rows(
         df.at[idx, "matched_edge_key"] = cand.edge[2]
 
     # ── Interpolate remaining rows, per group, in network path-distance
-    #    space (path_m) — the network analogue of
-    #    interpolation.interpolate_missing_s's arc-length interpolation ─────
+    #    space (path_m), time-weighted between bracketing anchors ──────────
     df_ts = df.set_index("original_index")["timestamp"]
     group_anchor_ns: dict[int, np.ndarray] = {}
     group_anchor_path: dict[int, np.ndarray] = {}
@@ -1104,7 +1094,7 @@ def match_trip_to_network_rows(
         df.at[idx, "match_status"] = "interpolated"
 
     # Safety net: any row somehow still unset (shouldn't happen given the
-    # branches above are exhaustive, mirrors interpolate_missing_s's tail)
+    # branches above are exhaustive)
     still_missing = df["match_status"].isna()
     no_ts = still_missing & ~df["timestamp_valid"]
     df.loc[no_ts, "match_status"] = "unresolved_missing_time"
@@ -1126,8 +1116,7 @@ def match_trip_csv_to_network(
     route_edges: set[EdgeKey] | None = None,
 ) -> pd.DataFrame:
     """Load one trip CSV, match it to the road network, and optionally save
-    output. Thin I/O wrapper around match_trip_to_network_rows, mirroring
-    pipeline.match_gps_csv_to_route.
+    output. Thin I/O wrapper around match_trip_to_network_rows.
     """
     trip_df = pd.read_csv(csv_path)
     result = match_trip_to_network_rows(

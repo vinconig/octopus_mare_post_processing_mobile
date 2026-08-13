@@ -22,24 +22,19 @@ python scripts/main.py
 python -m pytest
 
 # Run a single test file / test
-python -m pytest tests/test_hmm.py
-python -m pytest tests/test_hmm.py::test_name -q
+python -m pytest tests/test_netmatch.py
+python -m pytest tests/test_netmatch.py::test_name -q
 ```
 
 There is no lint/format command configured in this repo.
 
 ## Architecture
 
-### Two matchers, shared building blocks
+### The matcher and its shared building blocks
 
-The core distinction driving the whole `src/gps_route_matcher/` package is **single-route matching vs. network matching**:
+`netmatch.py` is the map matcher: states are `(edge, offset)` positions on any edge of a directed `networkx` road graph (`roadnet.py`, via OSMnx). It's used both for inferring the ground-truth route from many trips (`route_inference.py`) and for the final per-trip matching in `scripts/map_matching.py`. Both entry points share the same Viterbi cost model (emission = squared distance / 2σ²; transition = network-detour penalty + high-speed penalty using *real* elapsed time, not a fixed step), gap detection/segmentation (`gaps.py`), and input cleaning/validation (`cleaning.py`).
 
-- **Single-route matcher** (`candidates.py` + `hmm.py`, orchestrated by `pipeline.py`) — states are 1-D arc-length positions `s_m` on one predefined polyline (`route.py`'s `Route1D`). Used to match a recording against one already-known GPX route.
-- **Network matcher** (`netmatch.py`) — states are `(edge, offset)` positions on any edge of a directed `networkx` road graph (`roadnet.py`, via OSMnx). Used both for inferring the ground-truth route from many trips (`route_inference.py`) and for the final per-trip matching in `scripts/map_matching.py`.
-
-Both share: candidate generation logic (project GPS point onto nearby segments/edges), the Viterbi cost model (emission = squared distance / 2σ²; transition = backward-travel penalty + high-speed penalty using *real* elapsed time, not a fixed step), gap detection/segmentation (`gaps.py`), post-match interpolation in arc-length space (`interpolation.py`), and input cleaning/validation (`cleaning.py`).
-
-All tunable parameters for both matchers live in one place: `src/gps_route_matcher/config.py` (`MatchConfig` dataclass) — GPS sigma, candidate radius/k, gap thresholds, speed/backward/reversal penalties, timestamp-outlier detection window, out-of-bounds buffer, etc.
+All tunable parameters live in one place: `src/gps_route_matcher/config.py` (`MatchConfig` dataclass) — GPS sigma, candidate radius/k, gap thresholds, speed/reversal penalties, timestamp-outlier detection window, out-of-bounds buffer, etc.
 
 ### End-to-end pipeline (`scripts/main.py`)
 
@@ -65,4 +60,4 @@ Each stage reads the previous stage's output directory and writes a new one; fol
 
 ## Tests
 
-`tests/` mirrors the `src/gps_route_matcher/` modules (`test_hmm.py`, `test_candidates.py`, `test_cleaning.py`, `test_netmatch.py`, `test_route_inference.py`, `test_route_projection.py`, `test_interpolation.py`, `test_analysis.py`). No test touches live network/OSM downloads or Google Drive — those integration paths (`roadnet.py`, `download_gdrive_data.py`) are exercised only via `scripts/`.
+`tests/` mirrors the `src/gps_route_matcher/` modules (`test_cleaning.py`, `test_netmatch.py`, `test_route_inference.py`, `test_route_projection.py`, `test_analysis.py`). No test touches live network/OSM downloads or Google Drive — those integration paths (`roadnet.py`, `download_gdrive_data.py`) are exercised only via `scripts/`.

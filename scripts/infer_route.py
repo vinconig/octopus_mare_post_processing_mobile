@@ -4,8 +4,8 @@ Pipeline: load bairro polygon → fetch/cache road graph → load all trips →
 HMM-match each trip to the road network → count edge traversals → cluster
 trip endpoints → highest-support path → export GPX + frequency visualization.
 
-The resulting GPX is the track that the existing single-CSV matching pipeline
-(gps_route_matcher.pipeline) can then match future recordings against.
+The resulting GPX is the route that scripts/map_matching.py's network matcher
+then matches future recordings against.
 """
 
 import argparse

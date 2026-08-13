@@ -72,16 +72,3 @@ def assign_gaps_and_segments(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
     df["segment_id"] = _backfill_to_non_usable(df["segment_id"])
 
     return df
-
-
-def detect_gaps(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
-    """Deprecated: use assign_gaps_and_segments, which also assigns segment_id
-    from the same elapsed-time series. Kept so existing callers and tests that
-    only want dt_s / gap_before / gap_id keep working."""
-    return assign_gaps_and_segments(df, config)
-
-
-def assign_match_segments(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
-    """Deprecated: use assign_gaps_and_segments. Kept as an alias; it is now
-    idempotent with detect_gaps rather than a second pass over the same data."""
-    return assign_gaps_and_segments(df, config)
