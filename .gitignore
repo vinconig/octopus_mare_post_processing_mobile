@@ -19,6 +19,8 @@ data/
 output/
 cache/
 NotebooksCassiano/
+roadnetwork/
+routes/
 
 # Data / output files
 *.csv
