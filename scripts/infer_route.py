@@ -96,7 +96,8 @@ def infer_route(
     input_suffix = RAW_SUFFIX if stage == "raw" else WALKS_SUFFIX
     input_folders = [f"{t}{input_suffix}" for t in target_tracks]
 
-    out_dir = PROJECT_ROOT / "output"
+    out_dir = PROJECT_ROOT / "output" / "interactivemaps"
+    out_dir.mkdir(parents=True, exist_ok=True)
     inter_dir = out_dir / "intermediate"
     inter_dir.mkdir(parents=True, exist_ok=True)
     # Per-track runs write to distinct files so they don't overwrite each

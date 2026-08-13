@@ -52,7 +52,7 @@ if __name__ == "__main__":
     map_matching.map_match(folders=folders, force_refresh=False, overwrite=True)
 
      #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3_a_raw/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3_a_raw/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 
@@ -72,5 +72,5 @@ if __name__ == "__main__":
     #main data panel
     #replaces both generate_interactive_map_all_edge_data and generate_interactive_map_all_data, generates a single map with all data and edge analysis data
     output_path = generate_interactive_map_all_data_incl_edges(
-    os.path.join(PROJECT_ROOT, "output", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
+    os.path.join(PROJECT_ROOT, "output", "interactivemaps", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
     webbrowser.open(f"file://{output_path}")
