@@ -10,6 +10,7 @@ from gps_route_matcher.analysis import (
     assign_points_to_edges,
     reindex_to_full_route,
 )
+from gps_route_matcher.paths import EDGE_ANALYSIS_SUFFIX
 
 
 def _route_metadata() -> dict:
@@ -116,7 +117,7 @@ def test_assemble_output_column_order_and_route_id():
 
 def test_load_route_recordings_concatenates_and_tags_files(tmp_path, monkeypatch):
     monkeypatch.setattr(analysis_module, "PROJECT_ROOT", tmp_path)
-    edge_dir = tmp_path / "data" / "OM_1_edge_analysis"
+    edge_dir = tmp_path / "data" / f"OM_1{EDGE_ANALYSIS_SUFFIX}"
     edge_dir.mkdir(parents=True)
 
     def _write(name: str, temp_avg: list[float]) -> None:

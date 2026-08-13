@@ -1,14 +1,14 @@
-"""Map-match every recorded GPS trip in data/OM_1_trips..OM_4_trips onto the
-road network.
+"""Map-match every recorded GPS trip in data/OM_1_c_walks..OM_4_c_walks onto
+the road network.
 
 Per file: read raw CSV -> match_trip_to_network_rows (network HMM matching +
 timestamp inference + network-path-aware interpolation across gaps) -> write
-the enriched CSV to a sibling data/<folder>_matched/ directory under the same
+the enriched CSV to a sibling data/OM_n_d_matched/ directory under the same
 filename. The road graph, GraphIndex, NetworkDistanceCache and inverse
 transformer are built once and reused across all files (same pattern as
 scripts/infer_route.py), and only the top-level CSVs directly inside each
-data/OM_n_trips folder are processed — nested date/time subfolders hold stray
-non-standard leftovers, not raw CSVs, and are skipped entirely.
+data/OM_n_c_walks folder are processed — nested date/time subfolders hold
+stray non-standard leftovers, not raw CSVs, and are skipped entirely.
 """
 
 import argparse
@@ -26,10 +26,16 @@ from gps_route_matcher.netmatch import (
     build_graph_index,
     match_trip_to_network_rows,
 )
-from gps_route_matcher.paths import PROJECT_ROOT
+from gps_route_matcher.paths import (
+    BAIRRO_KML_PATH,
+    MATCHED_SUFFIX,
+    PROJECT_ROOT,
+    TRACKS,
+    WALKS_SUFFIX,
+    warn_if_stale_sibling,
+)
 from gps_route_matcher.roadnet import get_road_graph
 from gps_route_matcher.route import build_route_1d
-from gps_route_matcher.visualization import _BAIRRO_KML_PATH, _TRIP_TRACK_FOLDERS
 
 
 def _iter_csv_files(folder_path: Path) -> list[Path]:
@@ -46,19 +52,18 @@ def map_match(
     force_refresh: bool = False,
     overwrite: bool = True,
 ) -> None:
-    """Match every CSV in the given (or all) data/<folder> folders onto the road
-    network, writing enriched output to sibling data/<folder>_matched/ folders.
+    """Match every CSV in the given (or all) data/<track>_c_walks folders onto
+    the road network, writing enriched output to sibling data/<track>_d_matched/
+    folders.
 
-    folders defaults to _TRIP_TRACK_FOLDERS (OM_1_trips..OM_4_trips), the
-    canonical trips folders prepare_trips.py writes and main.py passes — the
-    bare OM_1..OM_4 names have no data/ directory of their own.
+    folders defaults to TRACKS (OM_1..OM_4), by bare track name.
 
     If overwrite is False, CSVs whose matched output already exists in
-    data/<folder>_matched/ are skipped (counted as skipped, not processed),
+    data/<track>_d_matched/ are skipped (counted as skipped, not processed),
     so a second run only fills in files that are missing or new.
     """
     print("1/4 Loading bairro polygon and road graph …")
-    polygon = load_kml_polygon(str(_BAIRRO_KML_PATH)).union_all()
+    polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
     graph = get_road_graph(polygon, network_type="walk", force_refresh=force_refresh)
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
@@ -68,8 +73,8 @@ def map_match(
     transformer_inv = pyproj.Transformer.from_crs(index.crs_metric, "EPSG:4326", always_xy=True)
     config = MatchConfig(infer_missing_timestamps=True)
 
-    target_folders = folders if folders else _TRIP_TRACK_FOLDERS
-    print(f"3/4 Matching CSV files in {target_folders} …")
+    target_tracks = folders if folders else TRACKS
+    print(f"3/4 Matching CSV files in {target_tracks} …")
 
     status_counts: Counter = Counter()
     n_files_processed = 0
@@ -77,29 +82,31 @@ def map_match(
     n_bridged_total = 0
     n_left_open_total = 0
 
-    for folder in target_folders: 
-        in_dir = PROJECT_ROOT / "data" / folder
+    for track in target_tracks:
+        in_dir = PROJECT_ROOT / "data" / f"{track}{WALKS_SUFFIX}"
         if not in_dir.exists():
-            print(f"    skip {folder}: not found")
+            print(f"    skip {track}: {in_dir} not found")
             continue
-        out_dir = PROJECT_ROOT / "data" / f"{folder}_matched"
+        warn_if_stale_sibling(track, in_dir.name)
+
+        out_dir = PROJECT_ROOT / "data" / f"{track}{MATCHED_SUFFIX}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        gpx_path = PROJECT_ROOT / "routes" / f"Inferred_Route_{folder}.gpx"
+        gpx_path = PROJECT_ROOT / "routes" / f"Inferred_Route_{track}.gpx"
         route = build_route_1d(load_gpx_route(str(gpx_path))) if gpx_path.is_file() else None
 
-        # Edges of this folder's inferred route get several candidate positions
+        # Edges of this track's inferred route get several candidate positions
         # each instead of one, so a continuous match on the correct edge can beat
         # a jump to a side street near a junction (see MatchConfig.
         # route_candidates_per_edge). Missing metadata just means no densification.
-        meta_path = PROJECT_ROOT / "routes" / "route_metadata" / f"{folder}_inferred_route.json"
+        meta_path = PROJECT_ROOT / "routes" / "route_metadata" / f"{track}_inferred_route.json"
         route_edges = (
             {(e["u"], e["v"], e["key"]) for e in load_route_metadata(meta_path)["edges"]}
             if meta_path.is_file()
             else None
         )
         if route_edges is None:
-            print(f"    {folder}: no route metadata, matching without route densification")
+            print(f"    {track}: no route metadata, matching without route densification")
 
         csv_paths = _iter_csv_files(in_dir)
         if max_files is not None:
@@ -142,10 +149,10 @@ def map_match(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--folders", nargs="+", default=None,
-                        help="Restrict to these data folders (e.g. OM_2_trips). Default: all of "
-                             "OM_1_trips..OM_4_trips.")
+                        help="Restrict to these tracks (e.g. OM_2). Default: all of "
+                             "OM_1..OM_4.")
     parser.add_argument("--max-files", type=int, default=None,
-                        help="Only match the first N CSV files per folder (for quick tests)")
+                        help="Only match the first N CSV files per track (for quick tests)")
     parser.add_argument("--force-refresh", action="store_true",
                         help="Bypass both the roadnetwork GraphML cache and osmnx's own "
                              "Overpass response cache, forcing a fresh OSM download")

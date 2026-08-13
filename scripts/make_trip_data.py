@@ -1,9 +1,9 @@
 """Assemble raw per-recording CSVs into one CSV per walk.
 
-Per folder (OM_1_raw..OM_4_raw):
+Per track (OM_1..OM_4):
 
-1. Clean + concatenate — read every *.csv sitting directly in data/OM_n_raw/
-   (its subfolders, e.g. data/OM_4_raw/25-11/, are NOT scanned), and run
+1. Clean + concatenate — read every *.csv sitting directly in data/OM_n_a_raw/
+   (its subfolders, e.g. data/OM_4_a_raw/25-11/, are NOT scanned), and run
    sessions.clean_recording on each *before* stacking them into
    data/OM_n_concatenated.csv.
 
@@ -22,8 +22,8 @@ Per folder (OM_1_raw..OM_4_raw):
 
 2. Split into trips — dedupe, cut the sensor's pooled rows into one session
    per walk, label each whole session morning/evening, and write one CSV per
-   session into data/OM_n_trips_split/. (scripts/prepare_trips.py then adds
-   the GPS cleaning flags and writes data/OM_n_trips/, which is what every
+   session into data/OM_n_b_split/. (scripts/prepare_trips.py then adds
+   the GPS cleaning flags and writes data/OM_n_c_walks/, which is what every
    later stage reads.)
 
    The label is per session rather than per row on purpose: a walk from 13:44
@@ -45,7 +45,7 @@ import argparse
 import pandas as pd
 
 from gps_route_matcher.config import MatchConfig
-from gps_route_matcher.paths import PROJECT_ROOT
+from gps_route_matcher.paths import PROJECT_ROOT, RAW_SUFFIX, SPLIT_SUFFIX, TRACKS, warn_if_stale_sibling
 from gps_route_matcher.sessions import (
     SESSION_ID_COL,
     SESSION_PERIOD_COL,
@@ -57,8 +57,6 @@ from gps_route_matcher.sessions import (
 )
 from gps_route_matcher.cleaning import TS_CLEAN_COL, TS_REASON_COL, TS_VALID_COL
 
-SENSORS: list[str] = ["OM_1_raw", "OM_2_raw", "OM_3_raw", "OM_4_raw"]
-
 
 def read_csv_robust(path):
     try:
@@ -68,14 +66,17 @@ def read_csv_robust(path):
         return None
 
 
-def concatenate_sensor(sensor: str, config: MatchConfig) -> pd.DataFrame | None:
-    """Clean every top-level CSV in data/<sensor>/ per recording, then stack
-    them, sorted by filename, into data/<track>_concatenated.csv, where
-    <track> is <sensor> with any trailing "_raw" stripped."""
-    sensor_dir = PROJECT_ROOT / "data" / sensor
-    track = sensor.removesuffix("_raw")
+def concatenate_sensor(track: str, config: MatchConfig, overwrite: bool) -> pd.DataFrame | None:
+    """Clean every top-level CSV in data/<track>_a_raw/ per recording, then
+    stack them, sorted by filename, into data/<track>_concatenated.csv."""
+    sensor_dir = PROJECT_ROOT / "data" / f"{track}{RAW_SUFFIX}"
     files = sorted(sensor_dir.glob("*.csv"), key=lambda p: p.name)
-    print(f"  {sensor}: {len(files)} csv files found directly in {sensor_dir}")
+    print(f"  {track}: {len(files)} csv files found directly in {sensor_dir}")
+
+    out_path = PROJECT_ROOT / "data" / f"{track}_concatenated.csv"
+    if not overwrite and out_path.exists():
+        print(f"    skip {track}: {out_path} already exists")
+        return None
 
     frames, n_unreadable = [], 0
     for f in files:
@@ -88,12 +89,11 @@ def concatenate_sensor(sensor: str, config: MatchConfig) -> pd.DataFrame | None:
         frames.append(cleaned)
 
     if not frames:
-        print(f"    skip {sensor}: no readable csv files")
+        print(f"    skip {track}: no readable csv files")
         return None
 
     concatenated = pd.concat(frames, ignore_index=True, sort=False)
 
-    out_path = PROJECT_ROOT / "data" / f"{track}_concatenated.csv"
     concatenated.to_csv(out_path, index=False)
     rejected = concatenated[TS_REASON_COL].notna()
     n_rejected = int(rejected.sum())
@@ -104,25 +104,23 @@ def concatenate_sensor(sensor: str, config: MatchConfig) -> pd.DataFrame | None:
     return concatenated
 
 
-def split_into_trips(sensor: str, concatenated: pd.DataFrame, config: MatchConfig) -> None:
-    """Cut a sensor's cleaned rows into sessions, label them, and write one
-    CSV per session into data/<track>_trips_split/, where <track> is <sensor>
-    with any trailing "_raw" stripped.
+def split_into_trips(track: str, concatenated: pd.DataFrame, config: MatchConfig, overwrite: bool) -> None:
+    """Cut a track's cleaned rows into sessions, label them, and write one
+    CSV per session into data/<track>_b_split/.
 
-    The plain data/<track>_trips/ name belongs to scripts/prepare_trips.py's
+    The data/<track>_c_walks/ name belongs to scripts/prepare_trips.py's
     output, which is what every later stage reads."""
-    track = sensor.removesuffix("_raw")
-
     df, n_duplicates = dedupe_rows(concatenated, config)
     df = sessionize(df, config)
     df = label_sessions(df, config)
 
     in_trip = df[SESSION_PERIOD_COL].notna()
 
-    out_dir = PROJECT_ROOT / "data" / f"{track}_trips_split"
+    out_dir = PROJECT_ROOT / "data" / f"{track}{SPLIT_SUFFIX}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_trips = 0
+    n_skipped = 0
     for _, g in df.loc[in_trip].groupby(SESSION_ID_COL, sort=True):
         g = g.sort_values(TS_CLEAN_COL)
         ts = pd.to_datetime(g[TS_CLEAN_COL])
@@ -131,12 +129,14 @@ def split_into_trips(sensor: str, concatenated: pd.DataFrame, config: MatchConfi
         duration_min = int((ts.iat[-1] - ts.iat[0]).total_seconds() // 60)
 
         trip_name = f"{track}_{date_str}_{period}_{duration_min}durmin.csv"
-        g.drop(columns=[SESSION_PERIOD_COL, SESSION_REJECT_COL]).to_csv(
-            out_dir / trip_name, index=False
-        )
+        out_path = out_dir / trip_name
+        if not overwrite and out_path.exists():
+            n_skipped += 1
+            continue
+        g.drop(columns=[SESSION_PERIOD_COL, SESSION_REJECT_COL]).to_csv(out_path, index=False)
         n_trips += 1
 
-    _write_quarantine(track, df.loc[~in_trip])
+    _write_quarantine(track, df.loc[~in_trip], overwrite)
 
     n_no_ts = int((~df[TS_VALID_COL].fillna(False)).sum())
     rejects = df.loc[~in_trip, SESSION_REJECT_COL].value_counts()
@@ -146,15 +146,18 @@ def split_into_trips(sensor: str, concatenated: pd.DataFrame, config: MatchConfi
     print(f"    rows of idle (non-walk) time  : {n_idle:,}")
     print(f"    rows in off-window sessions   : {int(rejects.get('session_off_window', 0)):,}")
     print(f"    rows in over-long sessions    : {int(rejects.get('session_too_long', 0)):,}")
-    print(f"    trips written                 : {n_trips}  -> {out_dir}")
+    print(f"    trips written                 : {n_trips}  ({n_skipped} skipped, already existed)  -> {out_dir}")
 
 
-def _write_quarantine(track: str, rejected: pd.DataFrame) -> None:
+def _write_quarantine(track: str, rejected: pd.DataFrame, overwrite: bool) -> None:
     """Persist rows that reached no trip, with why, so the loss is auditable
     instead of being a number in stdout that nobody can act on."""
     out_path = PROJECT_ROOT / "data" / f"{track}_quarantine.csv"
     if rejected.empty:
         out_path.unlink(missing_ok=True)
+        return
+    if not overwrite and out_path.exists():
+        print(f"    quarantine skipped             : {out_path} already exists")
         return
     rejected = rejected.copy()
     # A row with a usable timestamp is here because of its session's verdict;
@@ -171,30 +174,35 @@ def _write_quarantine(track: str, rejected: pd.DataFrame) -> None:
     print(f"    quarantined                   : {len(rejected):,}  -> {out_path}")
 
 
-def make_trip_data(sensors: list[str] | None = None, config: MatchConfig | None = None) -> None:
-    target_sensors = sensors if sensors else SENSORS
+def make_trip_data(
+    folders: list[str] | None = None, config: MatchConfig | None = None, overwrite: bool = True
+) -> None:
+    target_tracks = folders if folders else TRACKS
     config = config or MatchConfig()
 
-    print(f"1/2 Cleaning and concatenating raw recordings for {target_sensors} …")
-    concatenated_by_sensor: dict[str, pd.DataFrame] = {}
-    for sensor in target_sensors:
-        concatenated = concatenate_sensor(sensor, config)
+    print(f"1/2 Cleaning and concatenating raw recordings for {target_tracks} …")
+    concatenated_by_track: dict[str, pd.DataFrame] = {}
+    for track in target_tracks:
+        warn_if_stale_sibling(track, f"{track}{RAW_SUFFIX}")
+        concatenated = concatenate_sensor(track, config, overwrite)
         if concatenated is not None:
-            concatenated_by_sensor[sensor] = concatenated
+            concatenated_by_track[track] = concatenated
 
     print("2/2 Splitting into morning/evening trips …")
-    for sensor, concatenated in concatenated_by_sensor.items():
-        print(f"  {sensor}:")
-        split_into_trips(sensor, concatenated, config)
+    for track, concatenated in concatenated_by_track.items():
+        print(f"  {track}:")
+        split_into_trips(track, concatenated, config, overwrite)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sensors", nargs="+", default=None,
-                        help="Restrict to these sensors (e.g. OM_2_raw). Default: all of "
-                             "OM_1_raw..OM_4_raw.")
+    parser.add_argument("--folders", nargs="+", default=None,
+                        help="Restrict to these tracks (e.g. OM_2). Default: all of "
+                             "OM_1..OM_4.")
+    parser.add_argument("--no-overwrite", dest="overwrite", action="store_false",
+                        help="Skip files that already exist instead of overwriting them.")
     args = parser.parse_args()
-    make_trip_data(sensors=args.sensors)
+    make_trip_data(folders=args.folders, overwrite=args.overwrite)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 from gps_route_matcher.visualization import generate_interactive_map_all_data_incl_edges, generate_hmm_debug_map
 import os
 import webbrowser
-from gps_route_matcher.paths import PROJECT_ROOT
+from gps_route_matcher.paths import PROJECT_ROOT, TRACKS
 import download_gdrive_data
 import infer_route
 import map_matching
@@ -14,43 +14,45 @@ import prepare_trips
 
 
 if __name__ == "__main__":
-    
+
     # #initial data download from google drive (only needs to be done once, commented out after first run)
     # #download_gdrive_data.download_om_folders(PROJECT_ROOT)
+
+    #folder names of all routes/sensors, by bare track name — every stage below
+    #derives its own input/output data/ folder from this via its fixed suffix
+    #(see src/gps_route_matcher/paths.py)
+    folders = TRACKS
 
     #make trip data from raw CSVs: validates each recording's timestamps first (per raw file,
     #while its emit order/filename/own spread are still available), then concatenates per sensor
     #and cuts the result into one CSV per walk
-    make_trip_data.make_trip_data(sensors=["OM_1_raw", "OM_2_raw", "OM_3_raw", "OM_4_raw"])
+    make_trip_data.make_trip_data(folders=folders)
 
-    #applies the route-independent GPS cleaning once, data/OM_n_trips_split/ -> data/OM_n_trips/,
+    #applies the route-independent GPS cleaning once, data/OM_n_b_split/ -> data/OM_n_c_walks/,
     #so infer_route and map_matching below both read the same flags instead of each deriving them.
     #Everything that needs the inferred route stays in map_matching — the route is inferred below.
-    prepare_trips.prepare_trips(folders=["OM_1_trips_split", "OM_2_trips_split", "OM_3_trips_split", "OM_4_trips_split"])
+    prepare_trips.prepare_trips(folders=folders)
 
-    #folder names of all routes/sensors, where one csv correlates to one trip
-    folders = ["OM_1_trips", "OM_2_trips", "OM_3_trips", "OM_4_trips"]
-
-    # Manual route endpoints per folder for inferring the route that was taken ("LAT,LON" or (lat, lon)); leave a folder out (or use None, None) to keep automatic start/end clustering.
+    # Manual route endpoints per track for inferring the route that was taken ("LAT,LON" or (lat, lon)); leave a track out (or use None, None) to keep automatic start/end clustering.
     manual_endpoints = {
-        "OM_1_trips": ("-22.839904,-43.252176", "-22.840813,-43.245885"),
-        "OM_2_trips": ("-22.854508,-43.241940", "-22.851474,-43.245772"),
-        "OM_3_trips": ("-22.858845,-43.239657", "-22.867317,-43.241040"),
-        "OM_4_trips": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
+        "OM_1": ("-22.839904,-43.252176", "-22.840813,-43.245885"),
+        "OM_2": ("-22.854508,-43.241940", "-22.851474,-43.245772"),
+        "OM_3": ("-22.858845,-43.239657", "-22.867317,-43.241040"),
+        "OM_4": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
     }
 
     #infer routes from actual data based on traversal frequency
     #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
-    for i, folder in enumerate(folders): 
-       start, end = manual_endpoints.get(folder, (None, None))
-       infer_route.infer_route(folders=[folder], start=start, end=end, force_refresh=False) #would not redownload map (unless its not existing in cache/storage location path)
-       #infer_route.infer_route(folders=[folder], start=start, end=end,force_refresh=(i == 0)) #refreshes the map once (for the first folder) to ensure the road graph is cached, then reuses it for the rest
-    
-    #maps all points per recording to the road network and creates new CSVs with the matched data in data/OM_n_trips_matched/ folders
+    for i, track in enumerate(folders):
+       start, end = manual_endpoints.get(track, (None, None))
+       infer_route.infer_route(folders=[track], start=start, end=end, force_refresh=False) #would not redownload map (unless its not existing in cache/storage location path)
+       #infer_route.infer_route(folders=[track], start=start, end=end,force_refresh=(i == 0)) #refreshes the map once (for the first track) to ensure the road graph is cached, then reuses it for the rest
+
+    #maps all points per recording to the road network and creates new CSVs with the matched data in data/OM_n_d_matched/ folders
     map_matching.map_match(folders=folders, force_refresh=False, overwrite=True)
 
      #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3_raw/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3_a_raw/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output/hmm_debug.html"))
     print(f"Map saved to: {output_path}")
     webbrowser.open(f"file://{output_path}")
 
@@ -65,7 +67,7 @@ if __name__ == "__main__":
     generate_route_plots_publication.generate_route_plots_publication(folders=folders, time_of_day="morning", min_coverage_pct=50, start_date="20251115", end_date="20260430")
 
     #generates data on where the map should pan and zoom to
-    generate_map_info.generate_map_info() 
+    generate_map_info.generate_map_info()
 
     #main data panel
     #replaces both generate_interactive_map_all_edge_data and generate_interactive_map_all_data, generates a single map with all data and edge analysis data
