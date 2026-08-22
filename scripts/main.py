@@ -1,4 +1,5 @@
 from gps_route_matcher.visualization import generate_interactive_map_all_data_incl_edges, generate_hmm_debug_map
+import argparse
 import os
 import webbrowser
 from gps_route_matcher.paths import PROJECT_ROOT, TRACKS
@@ -14,6 +15,15 @@ import prepare_trips
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-browser", action="store_true",
+                         help="Don't open the generated maps (hmm debug, per-track "
+                              "inferred-route, and final all-data map) in a browser")
+    parser.add_argument("--force-refresh", action="store_true",
+                         help="Redownload the OSM road graph instead of reusing the cached "
+                              "one, once (for the first track) so it's cached for the rest")
+    args = parser.parse_args()
+    no_browser = args.no_browser
 
     # #initial data download from google drive (only needs to be done once, commented out after first run)
     # #download_gdrive_data.download_om_folders(PROJECT_ROOT)
@@ -45,19 +55,19 @@ if __name__ == "__main__":
     #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
     for i, track in enumerate(folders):
        start, end = manual_endpoints.get(track, (None, None))
-       infer_route.infer_route(folders=[track], start=start, end=end, force_refresh=False) #would not redownload map (unless its not existing in cache/storage location path)
-       #infer_route.infer_route(folders=[track], start=start, end=end,force_refresh=(i == 0)) #refreshes the map once (for the first track) to ensure the road graph is cached, then reuses it for the rest
+       infer_route.infer_route(folders=[track], start=start, end=end, force_refresh=(args.force_refresh and i == 0), no_browser=no_browser) #only refreshes on the first track (if requested); later tracks reuse the now-cached road graph
 
     #maps all points per recording to the road network and creates new CSVs with the matched data in data/OM_n_d_matched/ folders
-    map_matching.map_match(folders=folders, force_refresh=False, overwrite=True)
+    map_matching.map_match(folders=folders)
 
      #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
     output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_3_a_raw/OM_3_20260306_18_46durmin__REC000050.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
     print(f"Map saved to: {output_path}")
-    webbrowser.open(f"file://{output_path}")
+    if not no_browser:
+        webbrowser.open(f"file://{output_path}")
 
     #edge analysis
-    route_edge_analysis.route_edge_analysis(folders=folders, overwrite=True)
+    route_edge_analysis.route_edge_analysis(folders=folders)
 
     #generate per-route plots with generic filters (all time periods, all dates, all coverage levels)
     generate_route_plots.generate_route_plots(folders=folders, time_of_day="morning", min_coverage_pct=50, start_date="20251115", end_date="20260430")
@@ -73,4 +83,5 @@ if __name__ == "__main__":
     #replaces both generate_interactive_map_all_edge_data and generate_interactive_map_all_data, generates a single map with all data and edge analysis data
     output_path = generate_interactive_map_all_data_incl_edges(
     os.path.join(PROJECT_ROOT, "output", "interactivemaps", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
-    webbrowser.open(f"file://{output_path}")
+    if not no_browser:
+        webbrowser.open(f"file://{output_path}")
