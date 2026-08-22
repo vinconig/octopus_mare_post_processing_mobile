@@ -26,7 +26,7 @@ class MatchConfig:
     # over and the matcher starts preferring shortest paths that backtrack over
     # the route actually walked. Tuned empirically — do not raise it without
     # re-checking that behaviour.
-    gps_sigma_m: float = 0.5
+    gps_sigma_m: float = 0.3
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
     candidate_k: int = 30               # max candidates per observation
 
@@ -96,9 +96,8 @@ class MatchConfig:
     extrapolate_missing_timestamps: bool = False
 
     # ── Gap / segment handling ──────────────────────────────────────────────
-    max_bridge_gap_s: float = 90.0     # gaps ≤ this are bridged within one segment
     max_split_gap_s: float = 300.0     # gaps > this force a new HMM segment
-    max_speed_mps: float = 2.5         # ~7.2 km/h; used in transition penalty
+    max_speed_mps: float = 2.5         # ~9 km/h; used in transition penalty
 
     # ── Cross-segment gap bridging (network matcher only) ───────────────────
     # A gap between two HMM segments is only bridged with an inferred network
@@ -143,7 +142,7 @@ class MatchConfig:
     detect_timestamp_outliers: bool = True
     valid_timestamp_min: str | None = "2025-10-01"
     # None means "now + max_future_skew_h" — a recording cannot have been
-    # captured in the future, and a bound derived at runtime cannot expire.
+    # captured in the future, and a bound derived at runtime cannot expire. Since data colletion in this project is in the past, a hardcoded expiry date is fine.
     valid_timestamp_max: str | None = "2026-05-01"
     max_future_skew_h: float = 24.0
     timestamp_outlier_mad_k: float = 3.0
@@ -178,3 +177,25 @@ class MatchConfig:
     max_session_duration_s: float = 10800.0     # 3 h
     morning_hours: tuple[int, int] = (11, 14)   # [start, end) hour
     evening_hours: tuple[int, int] = (17, 20)   # [start, end) hour
+
+
+@dataclass
+class RouteInferenceConfig:
+    """Parameters for ground-truth route inference (Steps 3–5)."""
+
+    gamma: float = 2.0                  # frequency dominance in the edge cost
+    endpoint_cluster_eps_m: float = 75.0   # radius for endpoint clustering
+    endpoint_min_cluster_size: int = 3
+    # Optional explicit overrides — when set, clustering is skipped.
+    start_latlon: tuple[float, float] | None = None   # (lat, lon)
+    end_latlon: tuple[float, float] | None = None
+    start_node: int | None = None
+    end_node: int | None = None
+    # Optional via point for loop routes (start == end). When None and the
+    # route is a loop, the densest cluster of trip midpoints is used.
+    via_latlon: tuple[float, float] | None = None
+    via_node: int | None = None
+    # Trips whose matched length is below this are excluded from endpoint /
+    # midpoint clustering (they are usually stationary recordings at a base).
+    # They still contribute to edge traversal counts.
+    min_trip_length_m: float = 500.0

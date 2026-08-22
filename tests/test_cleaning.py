@@ -84,17 +84,6 @@ def test_original_index_preserved():
     assert list(out["original_index"]) == [0, 1]
 
 
-def test_raw_columns_preserved():
-    df = _make_df([
-        {"timestamp": "2026-01-01", "lon": "10.5", "lat": "20.5"},
-    ])
-    cfg = MatchConfig()
-    out = clean_gps_dataframe(df, cfg)
-    assert "timestamp_raw" in out.columns
-    assert "lon_raw" in out.columns
-    assert "lat_raw" in out.columns
-
-
 def test_mixed_valid_invalid():
     df = _make_df([
         {"timestamp": "2026-01-01 00:00:00", "lon": 10.0, "lat": 20.0},  # valid
@@ -435,7 +424,7 @@ def test_prepare_for_matching_assigns_gaps_and_segments_last():
         {"timestamp": "2026-01-01 00:00:05", "lon": -42.9, "lat": -22.0},  # off-route
         {"timestamp": "2026-01-01 00:00:10", "lon": -43.0, "lat": -21.9995},
     ])
-    cfg = MatchConfig(oob_buffer_m=20.0, max_bridge_gap_s=90.0)
+    cfg = MatchConfig(oob_buffer_m=20.0)
     out = prepare_for_matching(df, cfg, route=_ROUTE)
 
     # The off-route row is excluded from usable_for_hmm, so dt_s must be

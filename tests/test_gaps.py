@@ -18,8 +18,8 @@ def _frame(rows):
     )
 
 
-def test_dt_and_gap_id_only_count_usable_rows():
-    cfg = MatchConfig(max_bridge_gap_s=90.0, max_split_gap_s=300.0)
+def test_dt_only_counts_usable_rows():
+    cfg = MatchConfig(max_split_gap_s=300.0)
     df = assign_gaps_and_segments(
         _frame([(0, True), (5, False), (10, True), (200, True)]), cfg
     )
@@ -29,8 +29,6 @@ def test_dt_and_gap_id_only_count_usable_rows():
     assert np.isnan(df["dt_s"].iloc[1])
     assert df["dt_s"].iloc[2] == 10.0
     assert df["dt_s"].iloc[3] == 190.0
-    assert list(df["gap_before"]) == [False, False, False, True]
-    assert list(df["gap_id"]) == [0, 0, 0, 1]
 
 
 def test_non_usable_row_after_segment_zero_gets_its_own_segment():
@@ -51,21 +49,10 @@ def test_leading_non_usable_rows_fall_back_to_segment_zero():
         _frame([(0, False), (5, True), (1000, True)]), cfg
     )
     assert list(df["segment_id"]) == [0, 0, 1]
-    assert list(df["gap_id"]) == [0, 0, 1]
 
 
 def test_no_usable_rows_leaves_defaults():
     cfg = MatchConfig()
     df = assign_gaps_and_segments(_frame([(0, False), (5, False)]), cfg)
     assert list(df["segment_id"]) == [0, 0]
-    assert list(df["gap_id"]) == [0, 0]
     assert df["dt_s"].isna().all()
-
-
-def test_gap_and_segment_thresholds_are_independent():
-    # A 200 s gap exceeds max_bridge_gap_s but not max_split_gap_s: it opens a
-    # new gap_id while staying inside the same Viterbi segment.
-    cfg = MatchConfig(max_bridge_gap_s=90.0, max_split_gap_s=300.0)
-    df = assign_gaps_and_segments(_frame([(0, True), (200, True)]), cfg)
-    assert list(df["gap_id"]) == [0, 1]
-    assert list(df["segment_id"]) == [0, 0]

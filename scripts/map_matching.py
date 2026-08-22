@@ -19,6 +19,7 @@ import pandas as pd
 import pyproj
 
 from gps_route_matcher.analysis import load_route_metadata
+from gps_route_matcher.cleaning import TS_CLEAN_COL, TS_INFERRED_COL, TS_VALID_COL
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.io import load_gpx_route, load_kml_polygon
 from gps_route_matcher.netmatch import (
@@ -36,6 +37,17 @@ from gps_route_matcher.paths import (
 )
 from gps_route_matcher.roadnet import get_road_graph
 from gps_route_matcher.route import build_route_1d
+
+# Columns that are necessary earlier in the pipeline (cross-file dedup /
+# session-splitting for the ts_* trio; the segment_id derivation for dt_s)
+# but superseded or unread by the time a trip reaches the matched CSV — see
+# .claude/matching_methodology.md. Dropped only here, at the final write:
+# map_matching.py re-reads c_walks from a separate process and re-derives
+# timestamp/timestamp_valid/timestamp_inferred from ts_clean/ts_valid/
+# ts_inferred if present, so those three must still be on disk in c_walks.
+# (session_id isn't listed here — it's dropped earlier, at the b_split write
+# in make_trip_data.py, and never re-enters the pipeline after that.)
+_FINAL_CSV_DROP_COLUMNS = [TS_CLEAN_COL, TS_VALID_COL, TS_INFERRED_COL, "dt_s"]
 
 
 def _iter_csv_files(folder_path: Path) -> list[Path]:
@@ -127,7 +139,7 @@ def map_match(
                 trip_df, csv_path.stem, index, config, dist_cache, transformer_inv,
                 route=route, polygon=polygon, route_edges=route_edges,
             )
-            result.to_csv(out_path, index=False)
+            result.drop(columns=_FINAL_CSV_DROP_COLUMNS).to_csv(out_path, index=False)
 
             status_counts.update(result["match_status"].value_counts(dropna=False).to_dict())
             anchors = result[result["match_status"] == "matched"]

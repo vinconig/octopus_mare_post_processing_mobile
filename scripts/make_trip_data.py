@@ -133,7 +133,7 @@ def split_into_trips(track: str, concatenated: pd.DataFrame, config: MatchConfig
         if not overwrite and out_path.exists():
             n_skipped += 1
             continue
-        g.drop(columns=[SESSION_PERIOD_COL, SESSION_REJECT_COL]).to_csv(out_path, index=False)
+        g.drop(columns=[SESSION_PERIOD_COL, SESSION_REJECT_COL, SESSION_ID_COL]).to_csv(out_path, index=False)
         n_trips += 1
 
     _write_quarantine(track, df.loc[~in_trip], overwrite)

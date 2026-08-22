@@ -1,14 +1,17 @@
 """Gap detection and HMM segment assignment.
 
-A "gap" is a large time jump between consecutive usable GPS observations.
-Segments are contiguous runs of usable observations separated by gaps
-large enough to require independent HMM runs.
-
-Both are read off the same elapsed-time series, differing only in threshold
-(max_bridge_gap_s vs max_split_gap_s), so assign_gaps_and_segments computes it
-once and derives both. Callers must run this *after* usable_for_hmm is final
+Segments are contiguous runs of usable GPS observations separated by a time
+jump large enough to require an independent HMM run. assign_gaps_and_segments
+derives the elapsed-time series once (dt_s) and thresholds segment_id from
+it. Callers must run this *after* usable_for_hmm is final
 (cleaning.finalize_usable_for_hmm): every column here is derived from the
 usable set, so a segment_id computed against a larger one is stale.
+
+Note: cross-segment bridging (whether an inferred network path is drawn
+across a segment boundary) is a separate, spatial concept handled entirely
+in netmatch.py (config.max_gap_bridge_m / min_segment_points_to_bridge_gap)
+— it has no time cap of its own and does not read anything from this module
+beyond segment_id itself.
 """
 
 from __future__ import annotations
@@ -38,37 +41,28 @@ def assign_gaps_and_segments(df: pd.DataFrame, config: MatchConfig) -> pd.DataFr
     Adds columns:
         dt_s        : float – seconds since the previous usable observation
                       (NaN for the first usable row and all non-usable rows).
-        gap_before  : bool – True when dt_s > max_bridge_gap_s.
-        gap_id      : int  – counter that increments after each gap (0-based).
         segment_id  : int  – counter that increments after each dt_s >
                       max_split_gap_s; each segment gets its own Viterbi run.
 
-    Non-usable rows take the gap_id / segment_id of the nearest preceding
-    usable row (or 0 if there is none).
+    Non-usable rows take the segment_id of the nearest preceding usable row
+    (or 0 if there is none).
     """
     df = df.copy()
     df["dt_s"] = np.nan
-    df["gap_before"] = False
-    df["gap_id"] = 0
     df["segment_id"] = 0
 
     usable_idx = df.index[df["usable_for_hmm"]]
     if len(usable_idx) == 0:
         return df
 
-    # Real elapsed time between consecutive usable observations — the one
-    # series both thresholds are read off.
+    # Real elapsed time between consecutive usable observations.
     usable_ts = pd.to_datetime(df.loc[usable_idx, "timestamp"].values)
     dts = np.full(len(usable_idx), np.nan)
     dts[1:] = (usable_ts[1:] - usable_ts[:-1]) / np.timedelta64(1, "s")
     df.loc[usable_idx, "dt_s"] = dts
 
-    gap_before = dts > config.max_bridge_gap_s
-    df.loc[usable_idx[gap_before], "gap_before"] = True
-    df.loc[usable_idx, "gap_id"] = np.cumsum(gap_before)
     df.loc[usable_idx, "segment_id"] = np.cumsum(dts > config.max_split_gap_s)
 
-    df["gap_id"] = _backfill_to_non_usable(df["gap_id"])
     df["segment_id"] = _backfill_to_non_usable(df["segment_id"])
 
     return df

@@ -194,9 +194,6 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     Does NOT drop any rows. Adds the following columns:
 
     original_index      : row position in the original df (0-based int).
-    timestamp_raw       : raw value from config.timestamp_col.
-    lon_raw             : raw value from config.lon_col.
-    lat_raw             : raw value from config.lat_col.
     timestamp           : parsed pd.Timestamp (UTC) or NaT.
     lon                 : float or NaN.
     lat                 : float or NaN.
@@ -219,11 +216,6 @@ def clean_gps_dataframe(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
 
     # Preserve original row order
     df["original_index"] = np.arange(len(df), dtype=int)
-
-    # --- Raw copies --------------------------------------------------------
-    df["timestamp_raw"] = df[config.timestamp_col]
-    df["lon_raw"] = df[config.lon_col]
-    df["lat_raw"] = df[config.lat_col]
 
     # --- Timestamp: adopt the per-recording pass, or run it here -----------
     if TS_CLEAN_COL in df.columns:
