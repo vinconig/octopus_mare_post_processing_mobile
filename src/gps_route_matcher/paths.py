@@ -12,7 +12,7 @@ from pathlib import Path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 
-TRACKS: list[str] = ["OM_1", "OM_2", "OM_3", "OM_4"] #still needs to be updated i guess this should read MOBILESENSORS or something as per naming convention(needs to be defined)
+TRACKS: list[str] = ["OM_1", "OM_2", "OM_3", "OM_4"] 
 
 RAW_SUFFIX = "_a_raw"
 SPLIT_SUFFIX = "_b_split"
