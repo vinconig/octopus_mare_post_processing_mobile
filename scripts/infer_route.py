@@ -13,13 +13,12 @@ import json
 import os
 import webbrowser
 
-from gps_route_matcher.config import MatchConfig
+from gps_route_matcher.config import MatchConfig, RouteInferenceConfig
 from gps_route_matcher.io import load_kml_polygon, write_gpx_route
 from gps_route_matcher.netmatch import build_graph_index, match_all_trips
 from gps_route_matcher.paths import BAIRRO_KML_PATH, PROJECT_ROOT, RAW_SUFFIX, TRACKS, WALKS_SUFFIX, warn_if_stale_sibling
 from gps_route_matcher.roadnet import get_road_graph
 from gps_route_matcher.route_inference import (
-    RouteInferenceConfig,
     build_edge_counts,
     determine_endpoints,
     determine_via_node,

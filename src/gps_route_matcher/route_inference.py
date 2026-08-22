@@ -15,7 +15,6 @@ smoothing in the cost keeps such edges usable.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import networkx as nx
@@ -25,29 +24,8 @@ import pyproj
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString
 
+from .config import RouteInferenceConfig
 from .netmatch import EdgeKey, GraphIndex, TripMatchResult
-
-
-@dataclass
-class RouteInferenceConfig:
-    """Parameters for ground-truth route inference (Steps 3–5)."""
-
-    gamma: float = 2.0                  # frequency dominance in the edge cost
-    endpoint_cluster_eps_m: float = 75.0   # radius for endpoint clustering
-    endpoint_min_cluster_size: int = 3
-    # Optional explicit overrides — when set, clustering is skipped.
-    start_latlon: tuple[float, float] | None = None   # (lat, lon)
-    end_latlon: tuple[float, float] | None = None
-    start_node: int | None = None
-    end_node: int | None = None
-    # Optional via point for loop routes (start == end). When None and the
-    # route is a loop, the densest cluster of trip midpoints is used.
-    via_latlon: tuple[float, float] | None = None
-    via_node: int | None = None
-    # Trips whose matched length is below this are excluded from endpoint /
-    # midpoint clustering (they are usually stationary recordings at a base).
-    # They still contribute to edge traversal counts.
-    min_trip_length_m: float = 500.0
 
 
 # ── Step 3: frequency-weighted graph ─────────────────────────────────────────
@@ -210,7 +188,12 @@ def determine_endpoints(
         for tid, trip in tracks_df.groupby(trip_id_col, sort=False):
             if str(tid) not in matched_ids:
                 continue
-            valid = trip[(trip["Latitude"] != 0) | (trip["Longitude"] != 0)]
+            if "gps_valid" in trip.columns:
+                valid = trip[trip["gps_valid"]]
+            else:
+                # stage="raw" trips never went through cleaning.clean_gps_dataframe,
+                # so gps_valid doesn't exist yet — fall back to the raw zero check.
+                valid = trip[(trip["Latitude"] != 0) | (trip["Longitude"] != 0)]
             if valid.empty:
                 continue
             starts.append((float(valid["Longitude"].iloc[0]), float(valid["Latitude"].iloc[0])))

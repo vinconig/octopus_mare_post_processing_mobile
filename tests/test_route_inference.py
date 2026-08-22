@@ -8,11 +8,10 @@ import pytest
 import shapely.wkt
 from shapely.geometry import LineString
 
-from gps_route_matcher.config import MatchConfig
+from gps_route_matcher.config import MatchConfig, RouteInferenceConfig
 from gps_route_matcher.io import load_gpx_route, write_gpx_route
 from gps_route_matcher.netmatch import network_transition_cost
 from gps_route_matcher.route_inference import (
-    RouteInferenceConfig,
     _radius_cluster,
     _support_weight,
     build_edge_counts,
