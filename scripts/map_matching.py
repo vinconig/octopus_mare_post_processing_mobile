@@ -1,5 +1,5 @@
-"""Map-match every recorded GPS trip in data/OM_1_c_walks..OM_4_c_walks onto
-the road network.
+"""Map-match every recorded GPS trip in data/OM_1_c_prepared..OM_4_c_prepared
+onto the road network.
 
 Per file: read raw CSV -> match_trip_to_network_rows (network HMM matching +
 timestamp inference + network-path-aware interpolation across gaps) -> write
@@ -7,7 +7,7 @@ the enriched CSV to a sibling data/OM_n_d_matched/ directory under the same
 filename. The road graph, GraphIndex, NetworkDistanceCache and inverse
 transformer are built once and reused across all files (same pattern as
 scripts/infer_route.py), and only the top-level CSVs directly inside each
-data/OM_n_c_walks folder are processed — nested date/time subfolders hold
+data/OM_n_c_prepared folder are processed — nested date/time subfolders hold
 stray non-standard leftovers, not raw CSVs, and are skipped entirely.
 """
 
@@ -30,9 +30,9 @@ from gps_route_matcher.netmatch import (
 from gps_route_matcher.paths import (
     BAIRRO_KML_PATH,
     MATCHED_SUFFIX,
+    PREPARED_SUFFIX,
     PROJECT_ROOT,
     TRACKS,
-    WALKS_SUFFIX,
     warn_if_stale_sibling,
 )
 from gps_route_matcher.roadnet import get_road_graph
@@ -42,10 +42,10 @@ from gps_route_matcher.route import build_route_1d
 # session-splitting for the ts_* trio; the segment_id derivation for dt_s)
 # but superseded or unread by the time a trip reaches the matched CSV — see
 # .claude/matching_methodology.md. Dropped only here, at the final write:
-# map_matching.py re-reads c_walks from a separate process and re-derives
+# map_matching.py re-reads c_prepared from a separate process and re-derives
 # timestamp/timestamp_valid/timestamp_inferred from ts_clean/ts_valid/
-# ts_inferred if present, so those three must still be on disk in c_walks.
-# (session_id isn't listed here — it's dropped earlier, at the b_split write
+# ts_inferred if present, so those three must still be on disk in c_prepared.
+# (session_id isn't listed here — it's dropped earlier, at the b_walks write
 # in make_trip_data.py, and never re-enters the pipeline after that.)
 _FINAL_CSV_DROP_COLUMNS = [TS_CLEAN_COL, TS_VALID_COL, TS_INFERRED_COL, "dt_s"]
 
@@ -64,7 +64,7 @@ def map_match(
     force_refresh: bool = False,
     overwrite: bool = True,
 ) -> None:
-    """Match every CSV in the given (or all) data/<track>_c_walks folders onto
+    """Match every CSV in the given (or all) data/<track>_c_prepared folders onto
     the road network, writing enriched output to sibling data/<track>_d_matched/
     folders.
 
@@ -95,7 +95,7 @@ def map_match(
     n_left_open_total = 0
 
     for track in target_tracks:
-        in_dir = PROJECT_ROOT / "data" / f"{track}{WALKS_SUFFIX}"
+        in_dir = PROJECT_ROOT / "data" / f"{track}{PREPARED_SUFFIX}"
         if not in_dir.exists():
             print(f"    skip {track}: {in_dir} not found")
             continue

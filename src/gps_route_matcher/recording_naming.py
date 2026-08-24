@@ -7,7 +7,7 @@ pull in visualization.py's heavy plotting stack just to reuse this regex.
 Two conventions are supported:
   TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv     (data/OM_<n>_a_raw, the
       original per-recording exports; period is derived from the hour)
-  TRACK_YYYYMMDD_<morning|evening>_DURATIONdurmin.csv (data/OM_<n>_c_walks,
+  TRACK_YYYYMMDD_<morning|evening>_DURATIONdurmin.csv (data/OM_<n>_c_prepared,
       one CSV per trip already; period is named directly, no recid)
 """
 
@@ -25,7 +25,7 @@ _RECORDING_FILENAME_RE = re.compile(
 
 # e.g. "OM_1_20151019_evening_5durmin.csv" → track=OM_1, date=20151019,
 # period_word=evening, duration=5 (min). No recid: each (track, date, period)
-# has at most one file in data/OM_<n>_c_walks.
+# has at most one file in data/OM_<n>_c_prepared.
 _TRIP_FILENAME_RE = re.compile(
     r"^(?P<track>OM_\d+)_(?P<date>\d{8})_(?P<period_word>morning|evening)_(?P<duration>\d+)durmin$"
 )

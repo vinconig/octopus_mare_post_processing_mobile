@@ -38,7 +38,7 @@ if __name__ == "__main__":
     #and cuts the result into one CSV per walk
     make_trip_data.make_trip_data(folders=folders)
 
-    #applies the route-independent GPS cleaning once, data/OM_n_b_split/ -> data/OM_n_c_walks/,
+    #applies the route-independent GPS cleaning once, data/OM_n_b_walks/ -> data/OM_n_c_prepared/,
     #so infer_route and map_matching below both read the same flags instead of each deriving them.
     #Everything that needs the inferred route stays in map_matching — the route is inferred below.
     prepare_trips.prepare_trips(folders=folders)

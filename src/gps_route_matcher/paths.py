@@ -3,7 +3,7 @@
 Also the single source of truth for the pipeline's data/ folder-naming
 convention: each track (OM_1..OM_4) gets one folder per processing stage,
 named `{track}_{letter}_{stage}` where the letter encodes processing order
-(a=raw, b=split, c=walks, d=matched, e=edge_analysis). Every stage script
+(a=raw, b=walks, c=prepared, d=matched, e=edge_analysis). Every stage script
 imports its input/output suffix from here rather than deriving or
 hardcoding its own copy.
 """
@@ -12,27 +12,30 @@ from pathlib import Path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 
-TRACKS: list[str] = ["OM_1", "OM_2", "OM_3", "OM_4"] 
+TRACKS: list[str] = ["OM_1", "OM_2", "OM_3", "OM_4"]
 
 RAW_SUFFIX = "_a_raw"
-SPLIT_SUFFIX = "_b_split"
-WALKS_SUFFIX = "_c_walks"
+WALKS_SUFFIX = "_b_walks"
+PREPARED_SUFFIX = "_c_prepared"
 MATCHED_SUFFIX = "_d_matched"
 EDGE_ANALYSIS_SUFFIX = "_e_edge_analysis"
-_ALL_SUFFIXES = [RAW_SUFFIX, SPLIT_SUFFIX, WALKS_SUFFIX, MATCHED_SUFFIX, EDGE_ANALYSIS_SUFFIX]
+_ALL_SUFFIXES = [RAW_SUFFIX, WALKS_SUFFIX, PREPARED_SUFFIX, MATCHED_SUFFIX, EDGE_ANALYSIS_SUFFIX]
 
 RAW_FOLDERS: list[str] = [f"{t}{RAW_SUFFIX}" for t in TRACKS]
-SPLIT_FOLDERS: list[str] = [f"{t}{SPLIT_SUFFIX}" for t in TRACKS]
-WALK_FOLDERS: list[str] = [f"{t}{WALKS_SUFFIX}" for t in TRACKS]
+WALKS_FOLDERS: list[str] = [f"{t}{WALKS_SUFFIX}" for t in TRACKS]
+PREPARED_FOLDERS: list[str] = [f"{t}{PREPARED_SUFFIX}" for t in TRACKS]
 MATCHED_FOLDERS: list[str] = [f"{t}{MATCHED_SUFFIX}" for t in TRACKS]
 EDGE_ANALYSIS_FOLDERS: list[str] = [f"{t}{EDGE_ANALYSIS_SUFFIX}" for t in TRACKS]
 
 BAIRRO_KML_PATH: Path = PROJECT_ROOT / "borders" / "Bairro.kml"
+CALIBRATION_EQUATIONS_PATH: Path = PROJECT_ROOT / "calibration" / "calibration_equations.csv"
 
 # Suffixes retired by the a/b/c/d/e rename (including the pre-"_raw" bare
-# convention); used only by warn_if_stale_sibling below, kept separate from
-# _ALL_SUFFIXES so the two can't silently merge back together.
-_OBSOLETE_SUFFIXES = ["_raw", "_trips_split", "_trips_matched", "_trips_edge_analysis", "_trips", ""]
+# convention and the "_b_split"/"_c_walks" names those two stages carried
+# before being renamed to "_b_walks"/"_c_prepared"); used only by
+# warn_if_stale_sibling below, kept separate from _ALL_SUFFIXES so the two
+# can't silently merge back together.
+_OBSOLETE_SUFFIXES = ["_raw", "_trips_split", "_trips_matched", "_trips_edge_analysis", "_trips", "_b_split", "_c_walks", ""]
 
 
 def track_from_folder(folder: str) -> str:

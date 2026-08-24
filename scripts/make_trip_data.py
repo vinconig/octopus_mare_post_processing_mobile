@@ -22,9 +22,9 @@ Per track (OM_1..OM_4):
 
 2. Split into trips — dedupe, cut the sensor's pooled rows into one session
    per walk, label each whole session morning/evening, and write one CSV per
-   session into data/OM_n_b_split/. (scripts/prepare_trips.py then adds
-   the GPS cleaning flags and writes data/OM_n_c_walks/, which is what every
-   later stage reads.)
+   session into data/OM_n_b_walks/. (scripts/prepare_trips.py then adds
+   the GPS cleaning flags and writes data/OM_n_c_prepared/, which is what
+   every later stage reads.)
 
    The label is per session rather than per row on purpose: a walk from 13:44
    to 14:58 is one morning walk, and testing each row against a [11, 14) hour
@@ -45,7 +45,7 @@ import argparse
 import pandas as pd
 
 from gps_route_matcher.config import MatchConfig
-from gps_route_matcher.paths import PROJECT_ROOT, RAW_SUFFIX, SPLIT_SUFFIX, TRACKS, warn_if_stale_sibling
+from gps_route_matcher.paths import PROJECT_ROOT, RAW_SUFFIX, TRACKS, WALKS_SUFFIX, warn_if_stale_sibling
 from gps_route_matcher.sessions import (
     SESSION_ID_COL,
     SESSION_PERIOD_COL,
@@ -106,9 +106,9 @@ def concatenate_sensor(track: str, config: MatchConfig, overwrite: bool) -> pd.D
 
 def split_into_trips(track: str, concatenated: pd.DataFrame, config: MatchConfig, overwrite: bool) -> None:
     """Cut a track's cleaned rows into sessions, label them, and write one
-    CSV per session into data/<track>_b_split/.
+    CSV per session into data/<track>_b_walks/.
 
-    The data/<track>_c_walks/ name belongs to scripts/prepare_trips.py's
+    The data/<track>_c_prepared/ name belongs to scripts/prepare_trips.py's
     output, which is what every later stage reads."""
     df, n_duplicates = dedupe_rows(concatenated, config)
     df = sessionize(df, config)
@@ -116,7 +116,7 @@ def split_into_trips(track: str, concatenated: pd.DataFrame, config: MatchConfig
 
     in_trip = df[SESSION_PERIOD_COL].notna()
 
-    out_dir = PROJECT_ROOT / "data" / f"{track}{SPLIT_SUFFIX}"
+    out_dir = PROJECT_ROOT / "data" / f"{track}{WALKS_SUFFIX}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_trips = 0

@@ -16,7 +16,7 @@ import webbrowser
 from gps_route_matcher.config import MatchConfig, RouteInferenceConfig
 from gps_route_matcher.io import load_kml_polygon, write_gpx_route
 from gps_route_matcher.netmatch import build_graph_index, match_all_trips
-from gps_route_matcher.paths import BAIRRO_KML_PATH, PROJECT_ROOT, RAW_SUFFIX, TRACKS, WALKS_SUFFIX, warn_if_stale_sibling
+from gps_route_matcher.paths import BAIRRO_KML_PATH, PREPARED_SUFFIX, PROJECT_ROOT, RAW_SUFFIX, TRACKS, warn_if_stale_sibling
 from gps_route_matcher.roadnet import get_road_graph
 from gps_route_matcher.route_inference import (
     build_edge_counts,
@@ -40,7 +40,7 @@ def _parse_latlon(s: str | None) -> tuple[float, float] | None:
 
 def infer_route(
     folders: list[str] | None = None,
-    stage: str = "walks",
+    stage: str = "prepared",
     max_trips: int | None = None,
     gamma: float = 2.0,
     start: str | tuple[float, float] | None = None,
@@ -60,11 +60,12 @@ def infer_route(
         much cleaner result than the all-device default. Default: all of
         OM_1..OM_4.
     stage:
-        Which data/ stage to source trips from for this track: "walks" (the
-        cleaned data/OM_n_c_walks/ every other stage reads — the default, and
-        what scripts/main.py uses) or "raw" (data/OM_n_a_raw/, for a quick
-        look before running the cleaning stages). Non-default stages get
-        their own tag suffix so they never collide with the canonical route.
+        Which data/ stage to source trips from for this track: "prepared"
+        (the cleaned data/OM_n_c_prepared/ every other stage reads — the
+        default, and what scripts/main.py uses) or "raw" (data/OM_n_a_raw/,
+        for a quick look before running the cleaning stages). Non-default
+        stages get their own tag suffix so they never collide with the
+        canonical route.
     max_trips:
         Only match the first N trips (for quick tests).
     gamma:
@@ -88,11 +89,11 @@ def infer_route(
     def latlon(v: str | tuple[float, float] | None) -> tuple[float, float] | None:
         return _parse_latlon(v) if isinstance(v, str) else v
 
-    if stage not in ("walks", "raw"):
-        raise ValueError(f"stage must be 'walks' or 'raw', got {stage!r}")
+    if stage not in ("prepared", "raw"):
+        raise ValueError(f"stage must be 'prepared' or 'raw', got {stage!r}")
 
     target_tracks = folders if folders else TRACKS
-    input_suffix = RAW_SUFFIX if stage == "raw" else WALKS_SUFFIX
+    input_suffix = RAW_SUFFIX if stage == "raw" else PREPARED_SUFFIX
     input_folders = [f"{t}{input_suffix}" for t in target_tracks]
 
     out_dir = PROJECT_ROOT / "output" / "interactivemaps"
@@ -101,9 +102,9 @@ def infer_route(
     inter_dir.mkdir(parents=True, exist_ok=True)
     # Per-track runs write to distinct files so they don't overwrite each
     # other; a non-default stage gets its own tag suffix so an experimental
-    # raw-data run never collides with the canonical walks-based route.
+    # raw-data run never collides with the canonical prepared-based route.
     tag = "_".join(target_tracks) if folders else "all"
-    if stage != "walks":
+    if stage != "prepared":
         tag = f"{tag}_{stage}"
 
     gpx_path = PROJECT_ROOT / "routes" / f"Inferred_Route_{tag}.gpx"
@@ -207,8 +208,8 @@ def main() -> None:
                         help="Restrict to these tracks, by bare track name (e.g. OM_2). "
                              "Each device tends to have its own route, so per-track runs "
                              "usually give a much cleaner result than the all-device default.")
-    parser.add_argument("--stage", choices=["walks", "raw"], default="walks",
-                        help="Which data/ stage to source trips from (default: walks, "
+    parser.add_argument("--stage", choices=["prepared", "raw"], default="prepared",
+                        help="Which data/ stage to source trips from (default: prepared, "
                              "the cleaned data every other stage reads)")
     parser.add_argument("--gamma", type=float, default=2.0,
                         help="Frequency dominance in edge cost (default 2.0)")
