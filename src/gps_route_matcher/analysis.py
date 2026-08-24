@@ -39,10 +39,19 @@ _NON_ENV_COLUMNS = {
 # NaN matched_edge_u/v/key).
 _ASSIGNED_STATUSES = {"matched", "interpolated"}
 
+# Base env columns (as produced by aggregate_by_edge's <col>_avg naming) that
+# also get a cross-recording max in aggregate_across_recordings, alongside
+# the mean every other _avg column gets. That cross-recording `_max` is the
+# highest per-recording *average* on the edge, not related to the per-recording
+# `_max` (highest single raw reading) every env column gets from _ENV_STATS.
+_MAX_STAT_BASE_COLUMNS = ["temperature", "pm2.5_cal"]
+
 # Per-environmental-column statistics to compute: output suffix -> pandas agg
-# name. Add "median"/"std"/"min"/"max" (or a percentile callable) here to
-# extend the output without touching the aggregation logic itself.
-_ENV_STATS = {"avg": "mean"}
+# name. Add "median"/"std"/"min" (or a percentile callable) here to extend
+# the output without touching the aggregation logic itself. These are
+# per-recording, per-edge stats -- distinct from the cross-recording `_max`
+# aggregate_across_recordings computes for _MAX_STAT_BASE_COLUMNS below.
+_ENV_STATS = {"avg": "mean", "max": "max"}
 
 # Output columns that are never environmental statistics.
 _CORE_OUTPUT_COLUMNS = {
@@ -219,18 +228,25 @@ def aggregate_across_recordings(long_df: pd.DataFrame) -> pd.DataFrame:
     groupby().mean() skips them on its own -- a 1-point recording counts the
     same as a 50-point one otherwise. n_recordings counts how many
     recordings had >=1 point on the edge; n_points_total sums n_points
-    across every recording (informational only, not used as a weight)."""
+    across every recording (informational only, not used as a weight).
+
+    Temperature and PM2.5_cal additionally get a `_max` column: the highest
+    per-recording average seen on that edge, i.e. the worst single walk
+    rather than the average of averages."""
     avg_cols = sorted(c for c in long_df.columns if c.endswith("_avg"))
+    max_cols = [f"{base}_max" for base in _MAX_STAT_BASE_COLUMNS]
     grouped = long_df.groupby("edge_order", sort=True)
 
     out = grouped[["u", "v", "key", "length", "geometry"]].first()
     for col in avg_cols:
         out[col] = grouped[col].mean()
+    for base in _MAX_STAT_BASE_COLUMNS:
+        out[f"{base}_max"] = grouped[f"{base}_avg"].max()
     out["n_recordings"] = (long_df["n_points"] > 0).groupby(long_df["edge_order"]).sum().astype(int)
     out["n_points_total"] = grouped["n_points"].sum()
 
     ordered_cols = [
         "edge_order", "u", "v", "key", "length", "geometry",
-        *avg_cols, "n_recordings", "n_points_total",
+        *avg_cols, *max_cols, "n_recordings", "n_points_total",
     ]
     return out.reset_index()[ordered_cols].sort_values("edge_order").reset_index(drop=True)

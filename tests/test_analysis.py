@@ -68,7 +68,9 @@ def test_aggregate_by_edge_computes_avg_and_timestamp_mean():
     edge0 = agg[agg["edge_order"] == 0].iloc[0]
     assert edge0["n_points"] == 2
     assert edge0["temperature_avg"] == 21.0
+    assert edge0["temperature_max"] == 22.0
     assert edge0["humidity_avg"] == 51.0
+    assert edge0["humidity_max"] == 52.0
     assert edge0["start_timestamp"] == pd.Timestamp("2024-01-01 00:00:00")
     assert edge0["end_timestamp"] == pd.Timestamp("2024-01-01 00:00:10")
     assert edge0["timestamp_mean"] == pd.Timestamp("2024-01-01 00:00:05")
@@ -78,6 +80,7 @@ def test_aggregate_by_edge_computes_avg_and_timestamp_mean():
     edge1 = agg[agg["edge_order"] == 1].iloc[0]
     assert edge1["n_points"] == 1
     assert edge1["temperature_avg"] == 25.0
+    assert edge1["temperature_max"] == 25.0
     assert edge1["includes_interpolated_pts"] == False  # noqa: E712
 
 
@@ -94,6 +97,7 @@ def test_reindex_to_full_route_fills_zero_coverage_edges():
     assert edge2["n_points"] == 0
     assert edge2["includes_interpolated_pts"] == False  # noqa: E712
     assert pd.isna(edge2["temperature_avg"])
+    assert pd.isna(edge2["temperature_max"])
     assert pd.isna(edge2["start_timestamp"])
     assert edge2["length"] == 30.0
     assert edge2["geometry"] == "LINESTRING (2 0, 3 0)"
@@ -109,7 +113,8 @@ def test_assemble_output_column_order_and_route_id():
     assert list(out.columns) == [
         "route_id", "edge_order", "u", "v", "key", "length", "geometry",
         "start_timestamp", "end_timestamp", "timestamp_mean",
-        "humidity_avg", "temperature_avg", "n_points", "includes_interpolated_pts",
+        "humidity_avg", "humidity_max", "temperature_avg", "temperature_max",
+        "n_points", "includes_interpolated_pts",
     ]
     assert (out["route_id"] == "OM_1").all()
     assert len(out) == 3
