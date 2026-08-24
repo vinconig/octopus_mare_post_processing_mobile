@@ -27,6 +27,10 @@ routes/
 *.CSV
 *.html
 
+# ...except the calibration reference inputs (fixed, non-regenerable, like
+# borders/Bairro.kml), needed to reproduce prepare_trips.py's output.
+!calibration/*.csv
+
 
 # Google Drive OAuth
 credentials.json
