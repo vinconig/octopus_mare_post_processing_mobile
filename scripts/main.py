@@ -12,6 +12,7 @@ import generate_route_plots
 import generate_route_plots_publication
 import make_trip_data
 import prepare_trips
+import package_for_zenodo
 
 
 if __name__ == "__main__":
@@ -85,3 +86,8 @@ if __name__ == "__main__":
     os.path.join(PROJECT_ROOT, "output", "interactivemaps", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
     if not no_browser:
         webbrowser.open(f"file://{output_path}")
+
+    #assembles a Zenodo-ready deposit (matched + edge_analysis CSVs, route metadata,
+    #OSM graph snapshot, calibration files, data dictionary, provenance, license) into
+    #output/zenodo_package/
+    package_for_zenodo.package_for_zenodo(folders=folders)
