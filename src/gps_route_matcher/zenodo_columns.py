@@ -12,6 +12,10 @@ logic" spirit as `analysis._NON_ENV_COLUMNS`. A column's `action` is one of:
 - "drop" — pipeline-internal bookkeeping with no meaning outside this
   codebase; not shipped.
 
+An entry may also carry a "unit" (e.g. "°C", "%", "µg/m³"), surfaced in the
+data dictionary's "unit" column; omitted or empty for columns with no
+physical unit (ids, flags, geometry, etc.).
+
 A column present in the source CSV but absent from the config defaults to
 "keep" (never silently drop a column nobody made a decision about) and logs
 a warning, so a newly added pipeline column can't vanish from the export by
@@ -36,12 +40,14 @@ MATCHED_COLUMNS: dict[str, dict[str, Any]] = {
         "description": "Raw temperature reading (HS300 sensor, Arduino Nano 33 BLE Sense Rev2)",
         "caveat": "Not comparable across devices or time — the sensor hardware was replaced mid-project on "
         "each device. Use relative intra-recording values only, not absolute values.",
+        "unit": "degrees Celsius",
     },
     "Humidity": {
         "action": "keep_caveat",
         "description": "Raw humidity reading (HS300 sensor, Arduino Nano 33 BLE Sense Rev2)",
         "caveat": "Not comparable across devices or time — the sensor hardware was replaced mid-project on "
         "each device. Use relative intra-recording values only, not absolute values.",
+        "unit": "%",
     },
     "PM1.0": {"action": "keep", "description": "Raw PM1.0 reading, Sensirion SPS30 (uncalibrated)"},
     "PM2.5": {"action": "keep", "description": "Raw PM2.5 reading, Sensirion SPS30 (uncalibrated)"},
@@ -49,6 +55,7 @@ MATCHED_COLUMNS: dict[str, dict[str, Any]] = {
         "action": "keep",
         "description": "Calibrated PM2.5 (per-track linear equation; see calibration/calibration_equations.csv). "
         "Recommended primary PM2.5 metric — only PM2.5 is calibrated.",
+        "unit": "µg/m³",
     },
     "PM4.0": {"action": "keep", "description": "Raw PM4.0 reading, Sensirion SPS30 (uncalibrated)"},
     "PM10.0": {"action": "keep", "description": "Raw PM10.0 reading, Sensirion SPS30 (uncalibrated)"},
@@ -216,14 +223,17 @@ def build_data_dictionary_rows(dataset: str, df: pd.DataFrame, column_config: di
         if entry is not None:
             description = entry["description"]
             caveat = entry.get("caveat", "")
+            unit = entry.get("unit", "")
         else:
             description = _sensor_stat_description(col) or ""
             caveat = ""
+            unit = ""
         rows.append(
             {
                 "dataset": dataset,
                 "column": col,
                 "description": description,
+                "unit": unit,
                 "caveat": caveat,
             }
         )

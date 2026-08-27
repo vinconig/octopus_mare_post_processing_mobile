@@ -11,6 +11,7 @@ _CONFIG = {
     "drop_me": {"action": "drop"},
     "rename_me": {"action": "keep", "description": "kept and renamed", "rename": "renamed"},
     "caveat_me": {"action": "keep_caveat", "description": "kept with caveat", "caveat": "watch out"},
+    "unit_me": {"action": "keep", "description": "kept with a unit", "unit": "%"},
 }
 
 
@@ -21,6 +22,7 @@ def _df() -> pd.DataFrame:
             "drop_me": [3, 4],
             "rename_me": [5, 6],
             "caveat_me": [7, 8],
+            "unit_me": [0.1, 0.2],
         }
     )
 
@@ -28,7 +30,7 @@ def _df() -> pd.DataFrame:
 def test_apply_column_config_drops_and_renames():
     out = apply_column_config(_df(), _CONFIG)
 
-    assert list(out.columns) == ["keep_me", "renamed", "caveat_me"]
+    assert list(out.columns) == ["keep_me", "renamed", "caveat_me", "unit_me"]
     assert out["renamed"].tolist() == [5, 6]
 
 
@@ -64,6 +66,8 @@ def test_build_data_dictionary_rows_excludes_dropped_and_includes_caveat():
     assert by_column["keep_me"]["caveat"] == ""
     assert by_column["caveat_me"]["caveat"] == "watch out"
     assert by_column["renamed"]["description"] == "kept and renamed"
+    assert by_column["keep_me"]["unit"] == ""
+    assert by_column["unit_me"]["unit"] == "%"
     assert all(row["dataset"] == "matched" for row in rows)
 
 
