@@ -2,7 +2,9 @@
 outputs: data/OM_n_d_matched/ (point-level matched CSVs) and
 data/OM_n_e_edge_analysis/ (per-edge aggregated CSVs).
 
-Per track: read every matched/edge-analysis CSV, drop matched rows with
+Per track: read every matched/edge-analysis CSV whose filename date falls
+within [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive; trips outside this
+window are left out of the package entirely), drop matched rows with
 match_status == "unresolved_out_of_time_bounds" (never placed on the road
 network — not usable data for an external consumer), apply the column
 policy in gps_route_matcher.zenodo_columns (drop pipeline-internal columns,
@@ -14,6 +16,13 @@ routes/route_metadata/<track>_inferred_route.json (the edge_order/u,v,key
 anchor), roadnetwork/bairro_walk.graphml (the OSM snapshot those ids refer
 to), and calibration/calibration_equations.csv +
 calibration/cross_validation_metrics.csv (needed to interpret PM2.5_cal).
+Also generates interactive_map.html, the same Points / Street Segment
+browser as visualization.generate_interactive_map_all_data_incl_edges, but
+embedding only the data actually shipped in this package (see
+visualization.generate_zenodo_interactive_map) so it's viewable standalone
+from the deposit without the rest of this repo, and with its calendar
+navigation confined to [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX].
+
 Finally writes a generated data_dictionary.csv, a PROVENANCE.json recording
 the code commit and OSM graph snapshot version, and a CC-BY-4.0 LICENSE.
 
@@ -42,7 +51,9 @@ from gps_route_matcher.paths import (
     PROJECT_ROOT,
     TRACKS,
 )
+from gps_route_matcher.recording_naming import _parse_recording_filename
 from gps_route_matcher.roadnet import ROADNETWORK_DIR, load_road_graph
+from gps_route_matcher.visualization import generate_zenodo_interactive_map
 from gps_route_matcher.zenodo_columns import (
     EDGE_ANALYSIS_COLUMNS,
     MATCHED_COLUMNS,
@@ -55,6 +66,22 @@ from map_matching import _iter_csv_files
 # "matched"/"interpolated", which do carry a usable position) — excluded
 # from the export rather than shipped as unusable rows.
 _EXCLUDED_MATCH_STATUS = "unresolved_out_of_time_bounds"
+
+# This Zenodo deposit is scoped to one field campaign window: only trip CSVs
+# whose filename date falls in [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive)
+# are exported; every other trip is left out of the package entirely.
+_EXPORT_DATE_MIN = "20251201"
+_EXPORT_DATE_MAX = "20260430"
+
+
+def _in_export_window(csv_path: Path) -> bool:
+    """True if csv_path's filename date (see recording_naming.py) falls
+    within [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX]. Files whose name doesn't
+    parse at all are excluded rather than assumed in-range."""
+    parsed = _parse_recording_filename(csv_path.stem)
+    if parsed is None:
+        return False
+    return _EXPORT_DATE_MIN <= parsed["date"] <= _EXPORT_DATE_MAX
 
 _CC_BY_4_0_TEXT = """Creative Commons Attribution 4.0 International (CC BY 4.0)
 
@@ -119,6 +146,14 @@ def package_for_zenodo(
 
     If overwrite is False, CSVs whose export output already exists are
     skipped, so a second run only fills in files that are missing or new.
+    If overwrite is True (the default), each target track's pre-existing CSVs
+    in matched_out/edge_analysis_out are cleared before this run writes into
+    them — otherwise a file that no longer qualifies (e.g. after narrowing
+    _EXPORT_DATE_MIN/_EXPORT_DATE_MAX) would linger from a previous run
+    instead of disappearing from the package. Scoped to `target_tracks` so a
+    partial run (folders=[...]) never deletes other tracks' already-packaged
+    data; a track dropped from `folders` therefore keeps its stale files
+    until a full run (folders=None) cleans them up.
     """
     target_tracks = folders if folders else TRACKS
     out_dir = out_dir or (PROJECT_ROOT / "output" / "zenodo_package")
@@ -131,10 +166,17 @@ def package_for_zenodo(
     for d in (matched_out, edge_analysis_out, route_metadata_out, roadnetwork_out, calibration_out):
         d.mkdir(parents=True, exist_ok=True)
 
-    print(f"1/4 Exporting matched + edge_analysis CSVs for {target_tracks} …")
+    if overwrite:
+        for d in (matched_out, edge_analysis_out):
+            for track in target_tracks:
+                for stale_csv in d.glob(f"{track}_*.csv"):
+                    stale_csv.unlink()
+
+    print(f"1/5 Exporting matched + edge_analysis CSVs for {target_tracks} …")
     n_matched_files = 0
     n_edge_analysis_files = 0
     n_files_skipped = 0
+    n_files_out_of_window = 0
     n_matched_rows_excluded = 0
     matched_shipped_cols: dict[str, None] = {}
     edge_analysis_shipped_cols: dict[str, None] = {}
@@ -151,6 +193,9 @@ def package_for_zenodo(
 
         if matched_in.exists():
             for csv_path in _iter_csv_files(matched_in):
+                if not _in_export_window(csv_path):
+                    n_files_out_of_window += 1
+                    continue
                 out_path = matched_out / csv_path.name
                 if not overwrite and out_path.exists():
                     n_files_skipped += 1
@@ -167,6 +212,9 @@ def package_for_zenodo(
 
         if edge_analysis_in.exists():
             for csv_path in _iter_csv_files(edge_analysis_in):
+                if not _in_export_window(csv_path):
+                    n_files_out_of_window += 1
+                    continue
                 out_path = edge_analysis_out / csv_path.name
                 if not overwrite and out_path.exists():
                     n_files_skipped += 1
@@ -178,13 +226,26 @@ def package_for_zenodo(
         else:
             print(f"    skip {track} edge_analysis: not found ({edge_analysis_in})")
 
-    print("2/4 Copying companion files (OSM graph snapshot, calibration) …")
+    print("2/5 Copying companion files (OSM graph snapshot, calibration) …")
     shutil.copy2(ROADNETWORK_DIR / "bairro_walk.graphml", roadnetwork_out / "bairro_walk.graphml")
     shutil.copy2(CALIBRATION_EQUATIONS_PATH, calibration_out / CALIBRATION_EQUATIONS_PATH.name)
     cross_val_path = CALIBRATION_EQUATIONS_PATH.parent / "cross_validation_metrics.csv"
     shutil.copy2(cross_val_path, calibration_out / cross_val_path.name)
 
-    print("3/4 Writing data dictionary, provenance, and license …")
+    print("3/5 Generating interactive_map.html from the exported data …")
+    if any(_iter_csv_files(matched_out)) and any(_iter_csv_files(edge_analysis_out)):
+        map_path = generate_zenodo_interactive_map(
+            matched_dir=matched_out,
+            edge_analysis_dir=edge_analysis_out,
+            output_path=str(out_dir / "interactive_map.html"),
+            calendar_min=(int(_EXPORT_DATE_MIN[:4]), int(_EXPORT_DATE_MIN[4:6])),
+            calendar_max=(int(_EXPORT_DATE_MAX[:4]), int(_EXPORT_DATE_MAX[4:6])),
+        )
+        print(f"    wrote {map_path}")
+    else:
+        print("    skip: no exported matched/edge_analysis CSVs to embed")
+
+    print("4/5 Writing data dictionary, provenance, and license …")
     dictionary_rows = build_data_dictionary_rows(
         "matched", pd.DataFrame(columns=list(matched_shipped_cols)), MATCHED_COLUMNS
     ) + build_data_dictionary_rows(
@@ -195,9 +256,10 @@ def package_for_zenodo(
     _write_provenance(out_dir, n_matched_files, n_edge_analysis_files)
     (out_dir / "LICENSE").write_text(_CC_BY_4_0_TEXT)
 
-    print("4/4 Summary")
+    print("5/5 Summary")
     print(f"    matched files: {n_matched_files}, edge_analysis files: {n_edge_analysis_files}, "
-          f"skipped (already existed): {n_files_skipped}")
+          f"skipped (already existed): {n_files_skipped}, "
+          f"skipped (outside {_EXPORT_DATE_MIN}-{_EXPORT_DATE_MAX} window): {n_files_out_of_window}")
     print(f"    matched rows excluded (match_status == {_EXCLUDED_MATCH_STATUS!r}): "
           f"{n_matched_rows_excluded}")
     print(f"    wrote to {out_dir}")

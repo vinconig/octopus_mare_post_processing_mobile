@@ -102,14 +102,24 @@ MATCHED_COLUMNS: dict[str, dict[str, Any]] = {
         "description": "True if the row's timestamp falls outside the walk's derived active time window",
         "caveat": "Pipeline QA gating flag used to trim idle time before/after a walk.",
     },
+    "gps_inside_polygon": {
+        "action": "keep_caveat",
+        "description": "True if the raw GPS fix falls within the surveyed neighbourhood boundary polygon",
+        "caveat": "Pipeline QA gating flag. Combined with gps_valid and out_of_bounds, identifies a fix that "
+        "was valid and within the surveyed area but still landed off the matched route (fatal GPS drift).",
+    },
+    "out_of_bounds": {
+        "action": "keep_caveat",
+        "description": "True if the raw GPS fix lies outside the buffered corridor around the matched route",
+        "caveat": "Pipeline QA gating flag. Combined with gps_valid and gps_inside_polygon, identifies a fix "
+        "that was valid and within the surveyed area but still landed off the matched route (fatal GPS drift).",
+    },
     "lon": {"action": "drop"},  # near-duplicate of Latitude/Longitude (parsed float vs. raw)
     "lat": {"action": "drop"},
     "ts_reject_reason": {"action": "drop"},  # upstream per-recording timestamp QA code, mostly NA by this stage
     "original_index": {"action": "drop"},  # row position in the original raw file; internal join bookkeeping
     "usable_for_hmm": {"action": "drop"},  # internal HMM gating flag, superseded by match_status
-    "gps_inside_polygon": {"action": "drop"},  # internal gating flag feeding usable_for_hmm
     "distance_to_inferred_route_m": {"action": "drop"},  # route-buffer QA distance, distinct from distance_to_route_m
-    "out_of_bounds": {"action": "drop"},  # internal gating flag, subsumed by match_status
     "route_s_m": {"action": "drop"},  # internal arc-length helper along the route's reference polyline
     "segment_id": {"action": "drop"},  # internal Viterbi segmentation counter
     "group_id": {"action": "drop"},  # internal path-linking bookkeeping for interpolation
