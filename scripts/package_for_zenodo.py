@@ -2,15 +2,25 @@
 outputs: data/OM_n_d_matched/ (point-level matched CSVs) and
 data/OM_n_e_edge_analysis/ (per-edge aggregated CSVs).
 
-Per track: read every matched/edge-analysis CSV whose filename date falls
-within [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive; trips outside this
-window are left out of the package entirely), drop matched rows with
-match_status == "unresolved_out_of_time_bounds" (never placed on the road
-network — not usable data for an external consumer), apply the column
-policy in gps_route_matcher.zenodo_columns (drop pipeline-internal columns,
-keep documented data + QA flags), and write the result to
-output/zenodo_package/matched/ and output/zenodo_package/edge_analysis/
-under the same filenames. Also copies the companion files needed to make the
+Per track: read every matched CSV whose filename date falls within
+[_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive; trips outside this window
+are left out of the package entirely), drop rows with match_status ==
+"unresolved_out_of_time_bounds" (never placed on the road network — not
+usable data for an external consumer), apply the column policy in
+gps_route_matcher.zenodo_columns (drop pipeline-internal columns, keep
+documented data + QA flags), and write the result to
+output/zenodo_package/matched/. A walk whose shipped rows touch fewer than
+MIN_MATCHED_EDGES distinct road-network edges is excluded from the package
+entirely (too little network coverage to be a usable trip; see
+_n_distinct_matched_edges). The <duration>durmin filename component is
+rewritten at export time from the shipped rows' own timestamp_utc span
+(floored to whole minutes) rather than carried forward from the walk's
+original, uncleaned span — see _real_duration_min — so it reflects what's
+actually in the exported file, not the pre-cleaning recording length. The
+paired edge_analysis/ CSV for the same walk (if present) is exported under
+that identical, recomputed filename, so the two stay joinable by name; its
+own duration is never independently recomputed. Also copies the companion
+files needed to make the
 export reproducible/self-contained: each track's
 routes/route_metadata/<track>_inferred_route.json (the edge_order/u,v,key
 anchor), roadnetwork/bairro_walk.graphml (the OSM snapshot those ids refer
@@ -51,7 +61,7 @@ from gps_route_matcher.paths import (
     PROJECT_ROOT,
     TRACKS,
 )
-from gps_route_matcher.recording_naming import _parse_recording_filename
+from gps_route_matcher.recording_naming import _parse_recording_filename, _TRIP_FILENAME_RE
 from gps_route_matcher.roadnet import ROADNETWORK_DIR, load_road_graph
 from gps_route_matcher.visualization import generate_zenodo_interactive_map
 from gps_route_matcher.zenodo_columns import (
@@ -72,6 +82,32 @@ _EXCLUDED_MATCH_STATUS = "unresolved_out_of_time_bounds"
 # are exported; every other trip is left out of the package entirely.
 _EXPORT_DATE_MIN = "20251201"
 _EXPORT_DATE_MAX = "20260430"
+
+# A walk whose shipped matched/ rows touch fewer than this many distinct
+# road-network edges carries too little network coverage to be a usable
+# trip (e.g. the sensor was switched on/off before any real walking
+# happened) and is left out of the package entirely.
+MIN_MATCHED_EDGES = 5
+
+
+def _n_distinct_matched_edges(df: pd.DataFrame) -> int:
+    """Count of distinct (matched_edge_u, matched_edge_v) road-network edges
+    touched by df's rows (NaN edges, e.g. unresolved_large_gap rows, don't
+    count — they were never placed on the network)."""
+    edges = df[["matched_edge_u", "matched_edge_v"]].dropna()
+    return len(edges.drop_duplicates())
+
+
+def _real_duration_min(df: pd.DataFrame) -> int:
+    """Floor(minutes) span of df's own timestamp_utc column — the actual
+    time range covered by the rows being shipped, not the original walk's
+    pre-cleaning duration. Mirrors make_trip_data.py's
+    int((ts.iat[-1] - ts.iat[0]).total_seconds() // 60), just computed on
+    the exported data instead of the raw recording."""
+    ts = pd.to_datetime(df["timestamp_utc"], utc=True, format="ISO8601", errors="coerce").dropna()
+    if ts.empty:
+        return 0
+    return int((ts.max() - ts.min()).total_seconds() // 60)
 
 
 def _in_export_window(csv_path: Path) -> bool:
@@ -177,6 +213,7 @@ def package_for_zenodo(
     n_edge_analysis_files = 0
     n_files_skipped = 0
     n_files_out_of_window = 0
+    n_files_too_few_edges = 0
     n_matched_rows_excluded = 0
     matched_shipped_cols: dict[str, None] = {}
     edge_analysis_shipped_cols: dict[str, None] = {}
@@ -191,40 +228,50 @@ def package_for_zenodo(
             continue
         shutil.copy2(metadata_path, route_metadata_out / metadata_path.name)
 
-        if matched_in.exists():
-            for csv_path in _iter_csv_files(matched_in):
-                if not _in_export_window(csv_path):
-                    n_files_out_of_window += 1
-                    continue
-                out_path = matched_out / csv_path.name
-                if not overwrite and out_path.exists():
-                    n_files_skipped += 1
-                    continue
-                raw_df = pd.read_csv(csv_path)
-                excluded_mask = raw_df["match_status"] == _EXCLUDED_MATCH_STATUS
-                n_matched_rows_excluded += int(excluded_mask.sum())
-                df = apply_column_config(raw_df[~excluded_mask], MATCHED_COLUMNS)
-                df.to_csv(out_path, index=False)
-                matched_shipped_cols.update(dict.fromkeys(df.columns))
-                n_matched_files += 1
-        else:
+        if not matched_in.exists():
             print(f"    skip {track} matched: not found ({matched_in})")
+            continue
 
-        if edge_analysis_in.exists():
-            for csv_path in _iter_csv_files(edge_analysis_in):
-                if not _in_export_window(csv_path):
-                    n_files_out_of_window += 1
-                    continue
-                out_path = edge_analysis_out / csv_path.name
-                if not overwrite and out_path.exists():
-                    n_files_skipped += 1
-                    continue
-                df = apply_column_config(pd.read_csv(csv_path), EDGE_ANALYSIS_COLUMNS)
-                df.to_csv(out_path, index=False)
-                edge_analysis_shipped_cols.update(dict.fromkeys(df.columns))
-                n_edge_analysis_files += 1
-        else:
-            print(f"    skip {track} edge_analysis: not found ({edge_analysis_in})")
+        # matched/ drives the export: edge_analysis/ is derived from it
+        # (see ZENODO_README.md), so every walk's inclusion, exclusion, and
+        # exported filename are decided from its matched data alone, then
+        # applied identically to the paired edge_analysis file.
+        for csv_path in _iter_csv_files(matched_in):
+            if not _in_export_window(csv_path):
+                n_files_out_of_window += 1
+                continue
+
+            m = _TRIP_FILENAME_RE.match(csv_path.stem)
+            raw_df = pd.read_csv(csv_path)
+            excluded_mask = raw_df["match_status"] == _EXCLUDED_MATCH_STATUS
+            n_matched_rows_excluded += int(excluded_mask.sum())
+            df = apply_column_config(raw_df[~excluded_mask], MATCHED_COLUMNS)
+
+            if _n_distinct_matched_edges(df) < MIN_MATCHED_EDGES:
+                n_files_too_few_edges += 1
+                continue
+
+            new_name = f"{m['track']}_{m['date']}_{m['period_word']}_{_real_duration_min(df)}durmin.csv"
+            out_path = matched_out / new_name
+            if not overwrite and out_path.exists():
+                n_files_skipped += 1
+                continue
+            df.to_csv(out_path, index=False)
+            matched_shipped_cols.update(dict.fromkeys(df.columns))
+            n_matched_files += 1
+
+            ea_path = edge_analysis_in / csv_path.name
+            if not ea_path.is_file():
+                print(f"    skip {track} edge_analysis for {csv_path.name}: not found ({ea_path})")
+                continue
+            ea_out_path = edge_analysis_out / new_name
+            if not overwrite and ea_out_path.exists():
+                n_files_skipped += 1
+                continue
+            ea_df = apply_column_config(pd.read_csv(ea_path), EDGE_ANALYSIS_COLUMNS)
+            ea_df.to_csv(ea_out_path, index=False)
+            edge_analysis_shipped_cols.update(dict.fromkeys(ea_df.columns))
+            n_edge_analysis_files += 1
 
     print("2/5 Copying companion files (OSM graph snapshot, calibration) …")
     shutil.copy2(ROADNETWORK_DIR / "bairro_walk.graphml", roadnetwork_out / "bairro_walk.graphml")
@@ -260,6 +307,7 @@ def package_for_zenodo(
     print(f"    matched files: {n_matched_files}, edge_analysis files: {n_edge_analysis_files}, "
           f"skipped (already existed): {n_files_skipped}, "
           f"skipped (outside {_EXPORT_DATE_MIN}-{_EXPORT_DATE_MAX} window): {n_files_out_of_window}")
+    print(f"    walks excluded (< {MIN_MATCHED_EDGES} distinct matched edges): {n_files_too_few_edges}")
     print(f"    matched rows excluded (match_status == {_EXCLUDED_MATCH_STATUS!r}): "
           f"{n_matched_rows_excluded}")
     print(f"    wrote to {out_dir}")
