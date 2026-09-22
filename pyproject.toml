@@ -9,7 +9,18 @@ requires-python = ">=3.10"
 dependencies = ["pandas", "numpy", "shapely", "pyproj", "scipy", "gpxpy", "geopandas", "osmnx", "requests", "networkx"]
 
 [project.optional-dependencies]
-viz = ["plotly", "matplotlib"]
+# When assessing reproducibility of this repo, it became clear that we need
+# to fix the plotly version, because leaving it unpinned lets a freshly built
+# environment silently resolve to whatever is newest. Going from the 6.x line
+# to 7.x carries a major plotly.js bump (v3->v4) that changes something
+# internal to how the MapLibre-based "map"/Scattermap subplot initializes.
+# The interactive maps' control-panel JS (visualization.py) depends on that
+# internal shape to reach into gd._fullLayout and grab the raw MapLibre-GL
+# map instance; under 7.x that lookup silently no-ops instead of throwing, so
+# the map renders with no data and no control panel and nothing in the
+# console says why. Confirmed empirically (6.3.0 works, 7.1.0 doesn't) - don't
+# bump without re-verifying a real generated map renders data + control panel.
+viz = ["plotly==6.3.0", "matplotlib"]
 gdrive = ["google-api-python-client", "google-auth-httplib2", "google-auth-oauthlib"]
 dev = ["pytest"]
 
