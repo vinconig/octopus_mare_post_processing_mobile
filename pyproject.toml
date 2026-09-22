@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "gps-route-matcher"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["pandas", "numpy", "shapely", "pyproj", "scipy", "gpxpy", "geopandas", "osmnx", "requests"]
+dependencies = ["pandas", "numpy", "shapely", "pyproj", "scipy", "gpxpy", "geopandas", "osmnx", "requests", "networkx"]
 
 [project.optional-dependencies]
 viz = ["plotly", "matplotlib"]
