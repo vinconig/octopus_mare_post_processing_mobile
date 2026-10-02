@@ -47,7 +47,7 @@ if __name__ == "__main__":
     # Manual route endpoints per track for inferring the route that was taken ("LAT,LON" or (lat, lon)); leave a track out (or use None, None) to keep automatic start/end clustering.
     manual_endpoints = {
         "OM_1": ("-22.839904,-43.252176", "-22.840813,-43.245885"),
-        "OM_2": ("-22.854508,-43.241940", "-22.851474,-43.245772"),
+        "OM_2": ("-22.855784, -43.239960", "-22.851474,-43.245772"),
         "OM_3": ("-22.858845,-43.239657", "-22.867317,-43.241040"),
         "OM_4": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
     }
