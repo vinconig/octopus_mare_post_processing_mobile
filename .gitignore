@@ -21,6 +21,7 @@ cache/
 roadnetwork/
 routes/
 maptiles/
+mapdata/
 
 # Data / output files
 *.csv
