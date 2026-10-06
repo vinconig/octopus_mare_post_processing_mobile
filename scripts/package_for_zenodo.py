@@ -11,7 +11,7 @@ column because no shipped row can carry it), apply the column whitelist in
 gps_route_matcher.zenodo_columns (a short, lowercase set of columns, with
 `timestamp` converted to local time UTC-3 and rounded to whole seconds, and
 `pm2.5` being the calibrated value only), and write the result to
-output/zenodo_package/data/points_matched/. A walk whose shipped rows touch fewer than
+output/zenodo_package/data/mobile/. A walk whose shipped rows touch fewer than
 MIN_MATCHED_EDGES distinct road-network edges is excluded from the package
 entirely (too little network coverage to be a usable trip; see
 _n_distinct_matched_edges). The <duration>durmin filename component is
@@ -19,7 +19,7 @@ rewritten at export time from the shipped rows' own timestamp span
 (floored to whole minutes) rather than carried forward from the walk's
 original, uncleaned span — see _real_duration_min — so it reflects what's
 actually in the exported file, not the pre-cleaning recording length. The
-paired data/edges_aggregated/ CSV for the same walk (if present) is exported under
+paired data/mobile_agg_by_edge/ CSV for the same walk (if present) is exported under
 that identical, recomputed filename, so the two stay joinable by name; its
 own duration is never independently recomputed. It gets the same
 whitelist treatment (temperature, humidity and calibrated pm2.5 stats only,
@@ -68,15 +68,17 @@ from map_matching import _iter_csv_files
 _EXPORT_DATE_MIN = "20251201"
 _EXPORT_DATE_MAX = "20260430"
 
-# Layout of the deposit, relative to the package root: data/ holds the two
-# per-walk CSV families, metadata/ everything needed to interpret them.
-MATCHED_SUBDIR = "data/points_matched"
-EDGE_ANALYSIS_SUBDIR = "data/edges_aggregated"
+# Layout of the deposit, relative to the package root: data/ holds the
+# mobile (walked) CSV families plus a folder for the fixed (stationary) sensor
+# data, metadata/ everything needed to interpret them.
+MATCHED_SUBDIR = "data/mobile"
+EDGE_ANALYSIS_SUBDIR = "data/mobile_agg_by_edge"
+FIXED_SUBDIR = "data/fixed"  # stationary-sensor data; not exported by this script yet, folder is created empty
 ROUTE_METADATA_SUBDIR = "metadata/route_metadata"
 ROADNETWORK_SUBDIR = "metadata/roadnetwork"
 CALIBRATION_SUBDIR = "metadata/calibration_metadata"
 
-# A walk whose shipped points_matched rows touch fewer than this many distinct
+# A walk whose shipped data/mobile rows touch fewer than this many distinct
 # road-network edges carries too little network coverage to be a usable
 # trip (e.g. the sensor was switched on/off before any real walking
 # happened) and is left out of the package entirely.
@@ -143,7 +145,8 @@ def package_for_zenodo(
     route_metadata_out = out_dir / ROUTE_METADATA_SUBDIR
     roadnetwork_out = out_dir / ROADNETWORK_SUBDIR
     calibration_out = out_dir / CALIBRATION_SUBDIR
-    for d in (matched_out, edge_analysis_out, route_metadata_out, roadnetwork_out, calibration_out):
+    fixed_out = out_dir / FIXED_SUBDIR
+    for d in (matched_out, edge_analysis_out, fixed_out, route_metadata_out, roadnetwork_out, calibration_out):
         d.mkdir(parents=True, exist_ok=True)
 
     if overwrite:
@@ -174,7 +177,7 @@ def package_for_zenodo(
             print(f"    skip {track} matched: not found ({matched_in})")
             continue
 
-        # points_matched drives the export: edges_aggregated is derived from it
+        # data/mobile drives the export: data/mobile_agg_by_edge is derived from it
         # (see output/zenodo_package/ZENODO_README.md), so every walk's inclusion, exclusion, and
         # exported filename are decided from its matched data alone, then
         # applied identically to the paired edge_analysis file.
