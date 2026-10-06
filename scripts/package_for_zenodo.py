@@ -4,52 +4,44 @@ data/OM_n_e_edge_analysis/ (per-edge aggregated CSVs).
 
 Per track: read every matched CSV whose filename date falls within
 [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive; trips outside this window
-are left out of the package entirely), drop rows with match_status ==
-"unresolved_out_of_time_bounds" (never placed on the road network — not
-usable data for an external consumer), apply the column policy in
-gps_route_matcher.zenodo_columns (drop pipeline-internal columns, keep
-documented data + QA flags), and write the result to
-output/zenodo_package/matched/. A walk whose shipped rows touch fewer than
+are left out of the package entirely), drop every row with
+out_of_time_bounds == True (outside the walk's derived active time window —
+never usable data for an external consumer; the flag is not shipped as a
+column because no shipped row can carry it), apply the column whitelist in
+gps_route_matcher.zenodo_columns (a short, lowercase set of columns, with
+`timestamp` converted to local time UTC-3 and rounded to whole seconds, and
+`pm2.5` being the calibrated value only), and write the result to
+output/zenodo_package/data/points_matched/. A walk whose shipped rows touch fewer than
 MIN_MATCHED_EDGES distinct road-network edges is excluded from the package
 entirely (too little network coverage to be a usable trip; see
 _n_distinct_matched_edges). The <duration>durmin filename component is
-rewritten at export time from the shipped rows' own timestamp_utc span
+rewritten at export time from the shipped rows' own timestamp span
 (floored to whole minutes) rather than carried forward from the walk's
 original, uncleaned span — see _real_duration_min — so it reflects what's
 actually in the exported file, not the pre-cleaning recording length. The
-paired edge_analysis/ CSV for the same walk (if present) is exported under
+paired data/edges_aggregated/ CSV for the same walk (if present) is exported under
 that identical, recomputed filename, so the two stay joinable by name; its
-own duration is never independently recomputed. Also copies the companion
-files needed to make the
-export reproducible/self-contained: each track's
+own duration is never independently recomputed. It gets the same
+whitelist treatment (temperature, humidity and calibrated pm2.5 stats only,
+local-time timestamps). Also copies the companion files needed to make the
+export reproducible/self-contained, under metadata/: each track's
 routes/route_metadata/<track>_inferred_route.json (the edge_order/u,v,key
-anchor), roadnetwork/bairro_walk.graphml (the OSM snapshot those ids refer
-to), and calibration/calibration_equations.csv +
-calibration/cross_validation_metrics.csv (needed to interpret PM2.5_cal).
-Also generates interactive_map.html, the same Points / Street Segment
-browser as visualization.generate_interactive_map_all_data_incl_edges, but
-embedding only the data actually shipped in this package (see
-visualization.generate_zenodo_interactive_map) so it's viewable standalone
-from the deposit without the rest of this repo, and with its calendar
-navigation confined to [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX].
+anchor) -> metadata/route_metadata/, roadnetwork/bairro_walk.graphml (the OSM
+snapshot those ids refer to) -> metadata/roadnetwork/, and
+calibration/calibration_equations.csv + calibration/cross_validation_metrics.csv
+(needed to interpret pm2.5) -> metadata/calibration_metadata/.
 
-Finally writes a generated data_dictionary.csv, a PROVENANCE.json recording
-the code commit and OSM graph snapshot version, and a CC-BY-4.0 LICENSE.
-
-Does not write output/zenodo_package/README.md — the narrative dataset
-description is human-authored (see ZENODO_README.md at the repo root) and is
-not synthesized from column names.
+Does not write a README, data dictionary, provenance file or LICENSE — the
+dataset description (including the column reference and the OSM snapshot
+version) is human-authored in output/zenodo_package/ZENODO_README.md, and the
+license is set in Zenodo's own metadata.
 
 Requires routes/route_metadata/<track>_inferred_route.json to exist for each
 track processed (run infer_route.py first if a track is skipped).
 """
 
 import argparse
-import json
 import shutil
-import subprocess
-from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import pandas as pd
@@ -62,20 +54,13 @@ from gps_route_matcher.paths import (
     TRACKS,
 )
 from gps_route_matcher.recording_naming import _parse_recording_filename, _TRIP_FILENAME_RE
-from gps_route_matcher.roadnet import ROADNETWORK_DIR, load_road_graph
-from gps_route_matcher.visualization import generate_zenodo_interactive_map
+from gps_route_matcher.roadnet import ROADNETWORK_DIR
 from gps_route_matcher.zenodo_columns import (
     EDGE_ANALYSIS_COLUMNS,
     MATCHED_COLUMNS,
     apply_column_config,
-    build_data_dictionary_rows,
 )
 from map_matching import _iter_csv_files
-
-# Rows the matcher never placed on the road network at all (as opposed to
-# "matched"/"interpolated", which do carry a usable position) — excluded
-# from the export rather than shipped as unusable rows.
-_EXCLUDED_MATCH_STATUS = "unresolved_out_of_time_bounds"
 
 # This Zenodo deposit is scoped to one field campaign window: only trip CSVs
 # whose filename date falls in [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive)
@@ -83,7 +68,15 @@ _EXCLUDED_MATCH_STATUS = "unresolved_out_of_time_bounds"
 _EXPORT_DATE_MIN = "20251201"
 _EXPORT_DATE_MAX = "20260430"
 
-# A walk whose shipped matched/ rows touch fewer than this many distinct
+# Layout of the deposit, relative to the package root: data/ holds the two
+# per-walk CSV families, metadata/ everything needed to interpret them.
+MATCHED_SUBDIR = "data/points_matched"
+EDGE_ANALYSIS_SUBDIR = "data/edges_aggregated"
+ROUTE_METADATA_SUBDIR = "metadata/route_metadata"
+ROADNETWORK_SUBDIR = "metadata/roadnetwork"
+CALIBRATION_SUBDIR = "metadata/calibration_metadata"
+
+# A walk whose shipped points_matched rows touch fewer than this many distinct
 # road-network edges carries too little network coverage to be a usable
 # trip (e.g. the sensor was switched on/off before any real walking
 # happened) and is left out of the package entirely.
@@ -93,18 +86,19 @@ MIN_MATCHED_EDGES = 5
 def _n_distinct_matched_edges(df: pd.DataFrame) -> int:
     """Count of distinct (matched_edge_u, matched_edge_v) road-network edges
     touched by df's rows (NaN edges, e.g. unresolved_large_gap rows, don't
-    count — they were never placed on the network)."""
+    count — they were never placed on the network). Operates on the
+    exported (renamed) columns."""
     edges = df[["matched_edge_u", "matched_edge_v"]].dropna()
     return len(edges.drop_duplicates())
 
 
 def _real_duration_min(df: pd.DataFrame) -> int:
-    """Floor(minutes) span of df's own timestamp_utc column — the actual
+    """Floor(minutes) span of df's own timestamp column — the actual
     time range covered by the rows being shipped, not the original walk's
     pre-cleaning duration. Mirrors make_trip_data.py's
     int((ts.iat[-1] - ts.iat[0]).total_seconds() // 60), just computed on
     the exported data instead of the raw recording."""
-    ts = pd.to_datetime(df["timestamp_utc"], utc=True, format="ISO8601", errors="coerce").dropna()
+    ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
     if ts.empty:
         return 0
     return int((ts.max() - ts.min()).total_seconds() // 60)
@@ -118,56 +112,6 @@ def _in_export_window(csv_path: Path) -> bool:
     if parsed is None:
         return False
     return _EXPORT_DATE_MIN <= parsed["date"] <= _EXPORT_DATE_MAX
-
-_CC_BY_4_0_TEXT = """Creative Commons Attribution 4.0 International (CC BY 4.0)
-
-This dataset is licensed under the Creative Commons Attribution 4.0
-International License. To view a copy of this license, visit
-https://creativecommons.org/licenses/by/4.0/ or send a letter to Creative
-Commons, PO Box 1866, Mountain View, CA 94042, USA.
-
-You are free to:
-  Share   — copy and redistribute the material in any medium or format
-  Adapt   — remix, transform, and build upon the material
-  for any purpose, even commercially.
-
-Under the following terms:
-  Attribution — You must give appropriate credit, provide a link to the
-  license, and indicate if changes were made. You may do so in any
-  reasonable manner, but not in any way that suggests the licensor endorses
-  you or your use.
-
-No additional restrictions — You may not apply legal terms or technological
-measures that legally restrict others from doing anything the license
-permits.
-
-Full legal text: https://creativecommons.org/licenses/by/4.0/legalcode
-"""
-
-
-def _write_provenance(out_dir: Path, n_matched_files: int, n_edge_analysis_files: int) -> None:
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    try:
-        pipeline_version = version("gps-route-matcher")
-    except PackageNotFoundError:
-        pipeline_version = "unknown"
-
-    graph = load_road_graph(ROADNETWORK_DIR / "bairro_walk.graphml")
-    provenance = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "code_commit": commit,
-        "pipeline_version": pipeline_version,
-        "osm_graph_snapshot": {
-            "source_file": "roadnetwork/bairro_walk.graphml",
-            "created_date": graph.graph.get("created_date"),
-            "created_with": graph.graph.get("created_with"),
-        },
-        "n_matched_files": n_matched_files,
-        "n_edge_analysis_files": n_edge_analysis_files,
-    }
-    (out_dir / "PROVENANCE.json").write_text(json.dumps(provenance, indent=2))
 
 
 def package_for_zenodo(
@@ -194,11 +138,11 @@ def package_for_zenodo(
     target_tracks = folders if folders else TRACKS
     out_dir = out_dir or (PROJECT_ROOT / "output" / "zenodo_package")
 
-    matched_out = out_dir / "matched"
-    edge_analysis_out = out_dir / "edge_analysis"
-    route_metadata_out = out_dir / "route_metadata"
-    roadnetwork_out = out_dir / "roadnetwork"
-    calibration_out = out_dir / "calibration"
+    matched_out = out_dir / MATCHED_SUBDIR
+    edge_analysis_out = out_dir / EDGE_ANALYSIS_SUBDIR
+    route_metadata_out = out_dir / ROUTE_METADATA_SUBDIR
+    roadnetwork_out = out_dir / ROADNETWORK_SUBDIR
+    calibration_out = out_dir / CALIBRATION_SUBDIR
     for d in (matched_out, edge_analysis_out, route_metadata_out, roadnetwork_out, calibration_out):
         d.mkdir(parents=True, exist_ok=True)
 
@@ -208,15 +152,13 @@ def package_for_zenodo(
                 for stale_csv in d.glob(f"{track}_*.csv"):
                     stale_csv.unlink()
 
-    print(f"1/5 Exporting matched + edge_analysis CSVs for {target_tracks} …")
+    print(f"1/3 Exporting matched + edge_analysis CSVs for {target_tracks} …")
     n_matched_files = 0
     n_edge_analysis_files = 0
     n_files_skipped = 0
     n_files_out_of_window = 0
     n_files_too_few_edges = 0
     n_matched_rows_excluded = 0
-    matched_shipped_cols: dict[str, None] = {}
-    edge_analysis_shipped_cols: dict[str, None] = {}
 
     for track in target_tracks:
         matched_in = PROJECT_ROOT / "data" / f"{track}{MATCHED_SUFFIX}"
@@ -232,8 +174,8 @@ def package_for_zenodo(
             print(f"    skip {track} matched: not found ({matched_in})")
             continue
 
-        # matched/ drives the export: edge_analysis/ is derived from it
-        # (see ZENODO_README.md), so every walk's inclusion, exclusion, and
+        # points_matched drives the export: edges_aggregated is derived from it
+        # (see output/zenodo_package/ZENODO_README.md), so every walk's inclusion, exclusion, and
         # exported filename are decided from its matched data alone, then
         # applied identically to the paired edge_analysis file.
         for csv_path in _iter_csv_files(matched_in):
@@ -243,7 +185,7 @@ def package_for_zenodo(
 
             m = _TRIP_FILENAME_RE.match(csv_path.stem)
             raw_df = pd.read_csv(csv_path)
-            excluded_mask = raw_df["match_status"] == _EXCLUDED_MATCH_STATUS
+            excluded_mask = raw_df["out_of_time_bounds"].astype(bool)
             n_matched_rows_excluded += int(excluded_mask.sum())
             df = apply_column_config(raw_df[~excluded_mask], MATCHED_COLUMNS)
 
@@ -257,7 +199,6 @@ def package_for_zenodo(
                 n_files_skipped += 1
                 continue
             df.to_csv(out_path, index=False)
-            matched_shipped_cols.update(dict.fromkeys(df.columns))
             n_matched_files += 1
 
             ea_path = edge_analysis_in / csv_path.name
@@ -270,49 +211,22 @@ def package_for_zenodo(
                 continue
             ea_df = apply_column_config(pd.read_csv(ea_path), EDGE_ANALYSIS_COLUMNS)
             ea_df.to_csv(ea_out_path, index=False)
-            edge_analysis_shipped_cols.update(dict.fromkeys(ea_df.columns))
             n_edge_analysis_files += 1
 
-    print("2/5 Copying companion files (OSM graph snapshot, calibration) …")
+    print("2/3 Copying companion files (OSM graph snapshot, calibration) …")
     shutil.copy2(ROADNETWORK_DIR / "bairro_walk.graphml", roadnetwork_out / "bairro_walk.graphml")
     shutil.copy2(CALIBRATION_EQUATIONS_PATH, calibration_out / CALIBRATION_EQUATIONS_PATH.name)
     cross_val_path = CALIBRATION_EQUATIONS_PATH.parent / "cross_validation_metrics.csv"
     shutil.copy2(cross_val_path, calibration_out / cross_val_path.name)
 
-    print("3/5 Generating interactive_map.html from the exported data …")
-    if any(_iter_csv_files(matched_out)) and any(_iter_csv_files(edge_analysis_out)):
-        map_path = generate_zenodo_interactive_map(
-            matched_dir=matched_out,
-            edge_analysis_dir=edge_analysis_out,
-            output_path=str(out_dir / "interactive_map.html"),
-            calendar_min=(int(_EXPORT_DATE_MIN[:4]), int(_EXPORT_DATE_MIN[4:6])),
-            calendar_max=(int(_EXPORT_DATE_MAX[:4]), int(_EXPORT_DATE_MAX[4:6])),
-        )
-        print(f"    wrote {map_path}")
-    else:
-        print("    skip: no exported matched/edge_analysis CSVs to embed")
-
-    print("4/5 Writing data dictionary, provenance, and license …")
-    dictionary_rows = build_data_dictionary_rows(
-        "matched", pd.DataFrame(columns=list(matched_shipped_cols)), MATCHED_COLUMNS
-    ) + build_data_dictionary_rows(
-        "edge_analysis", pd.DataFrame(columns=list(edge_analysis_shipped_cols)), EDGE_ANALYSIS_COLUMNS
-    )
-    pd.DataFrame(dictionary_rows).to_csv(out_dir / "data_dictionary.csv", index=False)
-
-    _write_provenance(out_dir, n_matched_files, n_edge_analysis_files)
-    (out_dir / "LICENSE").write_text(_CC_BY_4_0_TEXT)
-
-    print("5/5 Summary")
+    print("3/3 Summary")
     print(f"    matched files: {n_matched_files}, edge_analysis files: {n_edge_analysis_files}, "
           f"skipped (already existed): {n_files_skipped}, "
           f"skipped (outside {_EXPORT_DATE_MIN}-{_EXPORT_DATE_MAX} window): {n_files_out_of_window}")
     print(f"    walks excluded (< {MIN_MATCHED_EDGES} distinct matched edges): {n_files_too_few_edges}")
-    print(f"    matched rows excluded (match_status == {_EXCLUDED_MATCH_STATUS!r}): "
-          f"{n_matched_rows_excluded}")
+    print(f"    matched rows excluded (out_of_time_bounds): {n_matched_rows_excluded}")
     print(f"    wrote to {out_dir}")
-    print("    NOTE: README.md is not generated — finish ZENODO_README.md at the repo root "
-          "(fill in its [PLACEHOLDER: ...] sections) and copy it into the package before uploading.")
+    print("    NOTE: no README is generated — ZENODO_README.md in the package folder is hand-authored.")
 
 
 def main() -> None:

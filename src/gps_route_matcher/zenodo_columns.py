@@ -3,238 +3,114 @@ analysis-ready pipeline outputs: point-level `d_matched` CSVs and per-edge
 `e_edge_analysis` CSVs.
 
 `MATCHED_COLUMNS` and `EDGE_ANALYSIS_COLUMNS` are each the single source of
-truth for what ships in the export, in the same "one dict, no scattered
-logic" spirit as `analysis._NON_ENV_COLUMNS`. A column's `action` is one of:
+truth for what ships in the export: an ordered whitelist, keyed by the
+*source* column name. A source column absent from the config is not shipped
+(a new pipeline column must be added here deliberately to reach the
+deposit), and the output's column order is the config's order, not the
+source file's. An entry may carry:
 
-- "keep" — shipped unchanged.
-- "keep_caveat" — shipped, but flagged with a caveat in the data dictionary
-  (e.g. a QA flag whose meaning depends on pipeline internals).
-- "drop" — pipeline-internal bookkeeping with no meaning outside this
-  codebase; not shipped.
+- "rename" — shipped name, if different from the source column.
+- "transform" — callable applied to the column before shipping (e.g.
+  `to_local_timestamp`).
 
-An entry may also carry a "unit" (e.g. "°C", "%", "µg/m³"), surfaced in the
-data dictionary's "unit" column; omitted or empty for columns with no
-physical unit (ids, flags, geometry, etc.).
-
-A column present in the source CSV but absent from the config defaults to
-"keep" (never silently drop a column nobody made a decision about) and logs
-a warning, so a newly added pipeline column can't vanish from the export by
-accident.
+What each shipped column means is documented by hand in
+output/zenodo_package/ZENODO_README.md.
 """
 
-import logging
+from datetime import timedelta, timezone
 from typing import Any
 
 import pandas as pd
 
 from gps_route_matcher.analysis import _CORE_OUTPUT_COLUMNS
 
-logger = logging.getLogger(__name__)
+# Local time during data collection (Rio de Janeiro). Brazil has no DST, so a
+# fixed offset is exact for the whole export window.
+LOCAL_TZ = timezone(timedelta(hours=-3), name="UTC-3")
+_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def to_local_timestamp(series: pd.Series) -> pd.Series:
+    """UTC timestamps (any ISO8601 precision) -> naive local-time strings,
+    rounded to the nearest whole second, formatted "YYYY-MM-DD HH:MM:SS".
+    Unparseable/missing values become empty."""
+    ts = pd.to_datetime(series, utc=True, format="ISO8601", errors="coerce")
+    ts = ts.dt.round("s").dt.tz_convert(LOCAL_TZ).dt.tz_localize(None)
+    return ts.dt.strftime(_TIMESTAMP_FORMAT)
+
+
+def to_nullable_int(series: pd.Series) -> pd.Series:
+    """Float column (floats only because unresolved rows are NaN) -> nullable
+    integer, so ids write as `11214125333`, not `11214125333.0`, with
+    unresolved rows left empty."""
+    return series.astype("Int64")
+
 
 MATCHED_COLUMNS: dict[str, dict[str, Any]] = {
-    "Timestamp": {"action": "keep", "description": "Raw device timestamp, as originally logged (unparsed)"},
-    "Latitude": {"action": "keep", "description": "Raw GPS latitude, as originally logged"},
-    "Longitude": {"action": "keep", "description": "Raw GPS longitude, as originally logged"},
-    "Temperature": {
-        "action": "keep_caveat",
-        "description": "Raw temperature reading (HS300 sensor, Arduino Nano 33 BLE Sense Rev2)",
-        "caveat": "Not comparable across devices or time — the sensor hardware was replaced mid-project on "
-        "each device. Use relative intra-recording values only, not absolute values.",
-        "unit": "degrees Celsius",
-    },
-    "Humidity": {
-        "action": "keep_caveat",
-        "description": "Raw humidity reading (HS300 sensor, Arduino Nano 33 BLE Sense Rev2)",
-        "caveat": "Not comparable across devices or time — the sensor hardware was replaced mid-project on "
-        "each device. Use relative intra-recording values only, not absolute values.",
-        "unit": "%",
-    },
-    "PM1.0": {"action": "keep", "description": "Raw PM1.0 reading, Sensirion SPS30 (uncalibrated)"},
-    "PM2.5": {"action": "keep", "description": "Raw PM2.5 reading, Sensirion SPS30 (uncalibrated)"},
-    "PM2.5_cal": {
-        "action": "keep",
-        "description": "Calibrated PM2.5 (per-track linear equation; see calibration/calibration_equations.csv). "
-        "Recommended primary PM2.5 metric — only PM2.5 is calibrated.",
-        "unit": "µg/m³",
-    },
-    "PM4.0": {"action": "keep", "description": "Raw PM4.0 reading, Sensirion SPS30 (uncalibrated)"},
-    "PM10.0": {"action": "keep", "description": "Raw PM10.0 reading, Sensirion SPS30 (uncalibrated)"},
-    "timestamp": {
-        "action": "keep",
-        "description": "Parsed, validated UTC timestamp (may be interpolated — see timestamp_inferred)",
-        "rename": "timestamp_utc",
-    },
-    "matched_lon": {"action": "keep", "description": "Longitude of the point's position snapped/interpolated onto the road network"},
-    "matched_lat": {"action": "keep", "description": "Latitude of the point's position snapped/interpolated onto the road network"},
-    "distance_to_route_m": {
-        "action": "keep",
-        "description": "Residual distance (m) between the raw GPS fix and its matched network position "
-        "(median ~5 m, p90 ~16 m across the dataset)",
-    },
-    "match_status": {
-        "action": "keep",
-        "description": "One of matched | interpolated | unresolved_missing_time | unresolved_large_gap | "
-        "unresolved_out_of_time_bounds — the primary usability field for this row",
-    },
-    "interpolated": {
-        "action": "keep_caveat",
-        "description": "True if the row's position was interpolated across a gap rather than directly matched",
-        "caveat": "Redundant with match_status == 'interpolated'; kept as a convenience filter column.",
-    },
-    "matched_edge_u": {
-        "action": "keep",
-        "description": "OSM node id, start of the matched directed road-network edge. Requires the OSM graph "
-        "snapshot shipped in roadnetwork/bairro_walk.graphml (see PROVENANCE.json) to resolve — OSM node ids "
-        "drift over time.",
-    },
-    "matched_edge_v": {"action": "keep", "description": "OSM node id, end of the matched directed road-network edge"},
-    "matched_edge_key": {"action": "keep", "description": "OSMnx parallel-edge index (0 unless multiple edges connect the same node pair)"},
-    "timestamp_inferred": {
-        "action": "keep_caveat",
-        "description": "True if `timestamp_utc` was back-filled/interpolated rather than read directly from the device",
-        "caveat": "Data-quality/provenance flag, not sensor data.",
-    },
-    "timestamp_valid": {
-        "action": "keep_caveat",
-        "description": "True if the row's timestamp parsed successfully during upstream cleaning",
-        "caveat": "Pipeline QA gating flag, largely redundant with match_status by this stage.",
-    },
-    "gps_valid": {
-        "action": "keep_caveat",
-        "description": "True if the raw lon/lat were numeric, in-range, and not the (0,0) missing-value sentinel",
-        "caveat": "Pipeline QA gating flag; explains why matched_lon/matched_lat may be missing.",
-    },
-    "out_of_time_bounds": {
-        "action": "keep_caveat",
-        "description": "True if the row's timestamp falls outside the walk's derived active time window",
-        "caveat": "Pipeline QA gating flag used to trim idle time before/after a walk.",
-    },
-    "gps_inside_polygon": {
-        "action": "keep_caveat",
-        "description": "True if the raw GPS fix falls within the surveyed neighbourhood boundary polygon",
-        "caveat": "Pipeline QA gating flag. Combined with gps_valid and out_of_bounds, identifies a fix that "
-        "was valid and within the surveyed area but still landed off the matched route (fatal GPS drift).",
-    },
-    "out_of_bounds": {
-        "action": "keep_caveat",
-        "description": "True if the raw GPS fix lies outside the buffered corridor around the matched route",
-        "caveat": "Pipeline QA gating flag. Combined with gps_valid and gps_inside_polygon, identifies a fix "
-        "that was valid and within the surveyed area but still landed off the matched route (fatal GPS drift).",
-    },
-    "lon": {"action": "drop"},  # near-duplicate of Latitude/Longitude (parsed float vs. raw)
-    "lat": {"action": "drop"},
-    "ts_reject_reason": {"action": "drop"},  # upstream per-recording timestamp QA code, mostly NA by this stage
-    "original_index": {"action": "drop"},  # row position in the original raw file; internal join bookkeeping
-    "usable_for_hmm": {"action": "drop"},  # internal HMM gating flag, superseded by match_status
-    "distance_to_inferred_route_m": {"action": "drop"},  # route-buffer QA distance, distinct from distance_to_route_m
-    "route_s_m": {"action": "drop"},  # internal arc-length helper along the route's reference polyline
-    "segment_id": {"action": "drop"},  # internal Viterbi segmentation counter
-    "group_id": {"action": "drop"},  # internal path-linking bookkeeping for interpolation
-    "path_m": {"action": "drop"},  # internal accumulated network-path distance, used only by interpolation math
-    "source_file": {"action": "drop"},  # provenance to a raw per-recording file that isn't itself published
+    "timestamp": {"transform": to_local_timestamp},
+    "matched_lon": {"rename": "longitude"},
+    "matched_lat": {"rename": "latitude"},
+    "Temperature": {"rename": "temperature"},
+    "Humidity": {"rename": "humidity"},
+    "PM2.5_cal": {"rename": "pm2.5"},
+    "match_status": {},
+    "matched_edge_u": {"transform": to_nullable_int},
+    "matched_edge_v": {"transform": to_nullable_int},
+    "matched_edge_key": {"transform": to_nullable_int},
+    "Longitude": {"rename": "longitude_raw"},
+    "Latitude": {"rename": "latitude_raw"},
 }
 
 # Fixed columns of an edge_analysis row (route/edge identity, geometry, and
-# per-recording timing/coverage) — reuses analysis._CORE_OUTPUT_COLUMNS so
-# this can't silently drift from the actual pipeline output.
-EDGE_ANALYSIS_COLUMNS: dict[str, dict[str, Any]] = {
-    "route_id": {"action": "keep", "description": "Track name (OM_1..OM_4)"},
-    "edge_order": {"action": "keep", "description": "0-based position of this edge in the route's canonical ordered edge sequence"},
-    "u": {"action": "keep", "description": "OSM node id, start of this directed road-network edge"},
-    "v": {"action": "keep", "description": "OSM node id, end of this directed road-network edge"},
-    "key": {"action": "keep", "description": "OSMnx parallel-edge index (0 unless multiple edges connect the same node pair)"},
-    "length": {"action": "keep", "description": "Edge length in meters"},
-    "geometry": {
-        "action": "keep",
-        "description": "WKT LINESTRING of the edge's road-segment geometry (lon/lat)",
-        "caveat": "u, v, key, length, and geometry are static per route edge and duplicated in "
-        "route_metadata/<track>_inferred_route.json, which is the canonical source if the two ever disagree "
-        "(e.g. after a route re-inference regenerates one but not the other). Kept here so each file is "
-        "directly usable without a join.",
-    },
-    "start_timestamp": {"action": "keep", "description": "Timestamp of the earliest point assigned to this edge in this recording"},
-    "end_timestamp": {"action": "keep", "description": "Timestamp of the latest point assigned to this edge in this recording"},
-    "timestamp_mean": {"action": "keep", "description": "Midpoint of start_timestamp and end_timestamp"},
-    "n_points": {
-        "action": "keep",
-        "description": "Count of raw points aggregated into this edge-row (sample size backing the *_avg/*_max stats; 0 means no coverage this recording)",
-    },
-    "includes_interpolated_pts": {
-        "action": "keep_caveat",
-        "description": "True if any point aggregated into this edge was positioned via interpolation rather than a direct match",
-        "caveat": "Per-edge provenance/QA flag summarizing the point-level interpolated column.",
-    },
+# per-recording timing/coverage) — listed to match analysis._CORE_OUTPUT_COLUMNS
+# so this can't silently drift from the actual pipeline output.
+_EDGE_CORE_COLUMNS: dict[str, dict[str, Any]] = {
+    "route_id": {},
+    "edge_order": {},
+    "u": {},
+    "v": {},
+    "key": {},
+    "length": {},
+    "geometry": {},
+    "start_timestamp": {"transform": to_local_timestamp},
+    "end_timestamp": {"transform": to_local_timestamp},
+    "timestamp_mean": {"transform": to_local_timestamp},
+    "n_points": {},
+    "includes_interpolated_pts": {},
 }
-assert set(EDGE_ANALYSIS_COLUMNS) == _CORE_OUTPUT_COLUMNS, (
-    "EDGE_ANALYSIS_COLUMNS' fixed columns have drifted from analysis._CORE_OUTPUT_COLUMNS"
+assert set(_EDGE_CORE_COLUMNS) == _CORE_OUTPUT_COLUMNS, (
+    "_EDGE_CORE_COLUMNS has drifted from analysis._CORE_OUTPUT_COLUMNS"
 )
 
-_SENSOR_STAT_SUFFIXES = ("_avg", "_max")
+
+def _edge_sensor_stats(source: str, shipped: str) -> dict[str, dict[str, Any]]:
+    """The *_avg/*_max entries for one sensor: `source` is the column stem in
+    the edge_analysis CSV, `shipped` the stem it ships under."""
+    return {f"{source}{suffix}": {"rename": f"{shipped}{suffix}"} for suffix in ("_avg", "_max")}
 
 
-def _sensor_stat_description(column: str) -> str | None:
-    for suffix in _SENSOR_STAT_SUFFIXES:
-        if column.endswith(suffix):
-            sensor = column[: -len(suffix)]
-            stat = "mean" if suffix == "_avg" else "maximum"
-            return f"Per-edge {stat} of {sensor} over points assigned to this edge in this recording"
-    return None
+# Mirrors the matched/ sensor selection: temperature, humidity, and
+# calibrated PM2.5 only (shipped as pm2.5, like matched/'s pm2.5 column).
+EDGE_ANALYSIS_COLUMNS: dict[str, dict[str, Any]] = {
+    **_EDGE_CORE_COLUMNS,
+    **_edge_sensor_stats("temperature", "temperature"),
+    **_edge_sensor_stats("humidity", "humidity"),
+    **_edge_sensor_stats("pm2.5_cal", "pm2.5"),
+}
 
 
 def apply_column_config(df: pd.DataFrame, column_config: dict[str, dict[str, Any]]) -> pd.DataFrame:
-    """Filter df's columns per column_config and apply any renames.
+    """Select, transform, rename, and order df's columns per column_config.
 
-    A column present in df but not in column_config, and not matching the
-    dynamic sensor-stat suffix pattern (*_avg/*_max, for edge_analysis),
-    defaults to "keep" with a logged warning rather than being silently
-    dropped.
+    Output columns are exactly those in column_config (in config order);
+    source columns not in the config are dropped. A configured column
+    missing from df raises KeyError rather than silently shipping a
+    narrower file.
     """
-    keep_cols = []
-    renames = {}
-    for col in df.columns:
-        entry = column_config.get(col)
-        if entry is None:
-            if _sensor_stat_description(col) is None:
-                logger.warning("column %r not in column config, defaulting to keep", col)
-            keep_cols.append(col)
-            continue
-        if entry["action"] == "drop":
-            continue
-        keep_cols.append(col)
-        if "rename" in entry:
-            renames[col] = entry["rename"]
-
-    out = df[keep_cols]
-    if renames:
-        out = out.rename(columns=renames)
+    out = pd.DataFrame(index=df.index)
+    for source, entry in column_config.items():
+        values = df[source]
+        if "transform" in entry:
+            values = entry["transform"](values)
+        out[entry.get("rename", source)] = values
     return out
-
-
-def build_data_dictionary_rows(dataset: str, df: pd.DataFrame, column_config: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
-    """One row per column actually shipped (post apply_column_config, i.e.
-    df's columns already reflect any renames) for the given dataset,
-    describing what it is and any caveat. Generated from the same config
-    apply_column_config uses, so it can't drift from what's shipped."""
-    rename_lookup = {entry["rename"]: original for original, entry in column_config.items() if "rename" in entry}
-
-    rows = []
-    for col in df.columns:
-        entry = column_config.get(rename_lookup.get(col, col))
-        if entry is not None:
-            description = entry["description"]
-            caveat = entry.get("caveat", "")
-            unit = entry.get("unit", "")
-        else:
-            description = _sensor_stat_description(col) or ""
-            caveat = ""
-            unit = ""
-        rows.append(
-            {
-                "dataset": dataset,
-                "column": col,
-                "description": description,
-                "unit": unit,
-                "caveat": caveat,
-            }
-        )
-    return rows

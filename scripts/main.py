@@ -87,7 +87,7 @@ if __name__ == "__main__":
     if not no_browser:
         webbrowser.open(f"file://{output_path}")
 
-    #assembles a Zenodo-ready deposit (matched + edge_analysis CSVs, route metadata,
-    #OSM graph snapshot, calibration files, data dictionary, provenance, license) into
+    #assembles a Zenodo-ready deposit (data/: slimmed matched + edge-aggregated CSVs;
+    #metadata/: route metadata, OSM graph snapshot, calibration files) into
     #output/zenodo_package/
     package_for_zenodo.package_for_zenodo(folders=folders)
