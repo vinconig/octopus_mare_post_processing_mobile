@@ -55,7 +55,7 @@ _ENV_STATS = {"avg": "mean", "max": "max"}
 
 # Output columns that are never environmental statistics.
 _CORE_OUTPUT_COLUMNS = {
-    "route_id", "edge_order", "u", "v", "key", "length", "geometry",
+    "edge_order", "u", "v", "key", "length", "geometry",
     "start_timestamp", "end_timestamp", "timestamp_mean", "n_points",
     "includes_interpolated_pts",
 }
@@ -164,8 +164,8 @@ def reindex_to_full_route(agg_df: pd.DataFrame, route_metadata: dict) -> pd.Data
     return merged
 
 
-def assemble_output(reindexed_df: pd.DataFrame, route_id: str) -> pd.DataFrame:
-    """Select/order the final output columns: route + edge identification,
+def assemble_output(reindexed_df: pd.DataFrame) -> pd.DataFrame:
+    """Select/order the final output columns: edge identification,
     geometry, timestamps, environmental stats (alphabetical, so output column
     order is stable even though raw matched-CSV column order varies
     file-to-file), then n_points/includes_interpolated_pts."""
@@ -175,9 +175,7 @@ def assemble_output(reindexed_df: pd.DataFrame, route_id: str) -> pd.DataFrame:
         "start_timestamp", "end_timestamp", "timestamp_mean",
         *stat_cols, "n_points", "includes_interpolated_pts",
     ]
-    out = reindexed_df[ordered_cols].copy()
-    out.insert(0, "route_id", route_id)
-    return out
+    return reindexed_df[ordered_cols].copy()
 
 
 def save_edge_analysis(df: pd.DataFrame, out_path: str | Path) -> None:
@@ -185,7 +183,7 @@ def save_edge_analysis(df: pd.DataFrame, out_path: str | Path) -> None:
 
 
 def run_edge_analysis(
-    matched_csv_path: str | Path, route_metadata: dict, route_id: str
+    matched_csv_path: str | Path, route_metadata: dict
 ) -> pd.DataFrame:
     """Full per-file pipeline: load -> restrict/assign to route edges ->
     aggregate -> reindex to the full route -> assemble the output dataframe."""
@@ -193,7 +191,7 @@ def run_edge_analysis(
     assigned = assign_points_to_edges(trip_df, route_metadata)
     aggregated = aggregate_by_edge(assigned)
     reindexed = reindex_to_full_route(aggregated, route_metadata)
-    return assemble_output(reindexed, route_id)
+    return assemble_output(reindexed)
 
 
 def load_route_recordings(track: str) -> pd.DataFrame:

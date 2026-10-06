@@ -26,7 +26,7 @@ class MatchConfig:
     # over and the matcher starts preferring shortest paths that backtrack over
     # the route actually walked. Tuned empirically — do not raise it without
     # re-checking that behaviour.
-    gps_sigma_m: float = 0.3
+    gps_sigma_m: float = 0.25
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
     candidate_k: int = 30               # max candidates per observation
 
@@ -79,8 +79,8 @@ class MatchConfig:
     # Densification only applies when the caller passes route_edges (i.e. in
     # scripts/map_matching.py, where the inferred route already exists);
     # route inference itself runs with one candidate per edge.
-    route_candidates_per_edge: int = 5
-    candidate_spacing_m: float = 10.0
+    route_candidates_per_edge: int = 10
+    candidate_spacing_m: float = 2.0
 
     # ── Timestamp inference ─────────────────────────────────────────────────
     expected_sample_interval_s: float | None = None

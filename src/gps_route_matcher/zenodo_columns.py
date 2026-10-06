@@ -65,7 +65,6 @@ MATCHED_COLUMNS: dict[str, dict[str, Any]] = {
 # per-recording timing/coverage) — listed to match analysis._CORE_OUTPUT_COLUMNS
 # so this can't silently drift from the actual pipeline output.
 _EDGE_CORE_COLUMNS: dict[str, dict[str, Any]] = {
-    "route_id": {},
     "edge_order": {},
     "u": {},
     "v": {},

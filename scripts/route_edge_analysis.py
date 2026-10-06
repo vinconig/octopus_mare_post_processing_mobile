@@ -76,7 +76,7 @@ def route_edge_analysis(
                 n_files_skipped += 1
                 continue
 
-            result = run_edge_analysis(csv_path, route_metadata, route_id=track)
+            result = run_edge_analysis(csv_path, route_metadata)
             save_edge_analysis(result, out_path)
 
             n_files_processed += 1

@@ -103,20 +103,19 @@ def test_reindex_to_full_route_fills_zero_coverage_edges():
     assert edge2["geometry"] == "LINESTRING (2 0, 3 0)"
 
 
-def test_assemble_output_column_order_and_route_id():
+def test_assemble_output_column_order():
     route_metadata = _route_metadata()
     assigned = assign_points_to_edges(_trip_df(), route_metadata)
     agg = aggregate_by_edge(assigned)
     full = reindex_to_full_route(agg, route_metadata)
-    out = assemble_output(full, route_id="OM_1")
+    out = assemble_output(full)
 
     assert list(out.columns) == [
-        "route_id", "edge_order", "u", "v", "key", "length", "geometry",
+        "edge_order", "u", "v", "key", "length", "geometry",
         "start_timestamp", "end_timestamp", "timestamp_mean",
         "humidity_avg", "humidity_max", "temperature_avg", "temperature_max",
         "n_points", "includes_interpolated_pts",
     ]
-    assert (out["route_id"] == "OM_1").all()
     assert len(out) == 3
 
 
@@ -127,7 +126,6 @@ def test_load_route_recordings_concatenates_and_tags_files(tmp_path, monkeypatch
 
     def _write(name: str, temp_avg: list[float]) -> None:
         pd.DataFrame({
-            "route_id": ["OM_1"] * 2,
             "edge_order": [0, 1],
             "u": [1, 2], "v": [2, 3], "key": [0, 0],
             "length": [10.0, 20.0],
