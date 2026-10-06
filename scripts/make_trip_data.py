@@ -21,7 +21,7 @@ Per track (OM_1..OM_4):
    stays a faithful union of the raw rows.
 
 2. Split into trips — dedupe, cut the sensor's pooled rows into one session
-   per walk, label each whole session morning/evening, and write one CSV per
+   per walk, label each whole session morning/afternoon, and write one CSV per
    session into data/OM_n_b_walks/. (scripts/prepare_trips.py then adds
    the GPS cleaning flags and writes data/OM_n_c_prepared/, which is what
    every later stage reads.)
@@ -30,7 +30,7 @@ Per track (OM_1..OM_4):
    to 14:58 is one morning walk, and testing each row against a [11, 14) hour
    window instead would keep its first 15 minutes and drop the other 59.
 
-   Each trip file is named OM_n_YYYYMMDD_<morning|evening>_<D>durmin.csv,
+   Each trip file is named OM_n_YYYYMMDD_<morning|afternoon>_<D>durmin.csv,
    where <D> is the session's own duration in whole minutes — not the duration
    embedded in any single source recording's filename, since one walk can span
    several recordings.
@@ -188,7 +188,7 @@ def make_trip_data(
         if concatenated is not None:
             concatenated_by_track[track] = concatenated
 
-    print("2/2 Splitting into morning/evening trips …")
+    print("2/2 Splitting into morning/afternoon trips …")
     for track, concatenated in concatenated_by_track.items():
         print(f"  {track}:")
         split_into_trips(track, concatenated, config, overwrite)

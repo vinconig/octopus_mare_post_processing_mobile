@@ -212,8 +212,8 @@ def _cleaned(rows, stem=STEM, config=None):
 def test_sessionize_splits_on_silence_not_on_the_clock():
     cfg = MatchConfig(session_split_gap_s=1800.0)
     morning = _rows(pd.Timestamp("2026-03-09 12:00:00"), 5)
-    evening = _rows(pd.Timestamp("2026-03-09 18:00:00"), 5)
-    out = sessionize(_cleaned(morning + evening), cfg)
+    afternoon = _rows(pd.Timestamp("2026-03-09 18:00:00"), 5)
+    out = sessionize(_cleaned(morning + afternoon), cfg)
     assert list(out[SESSION_ID_COL]) == [0] * 5 + [1] * 5
 
 
@@ -230,14 +230,14 @@ def test_a_walk_running_past_a_window_edge_stays_one_morning_session():
 
 
 def test_a_walk_starting_before_a_window_edge_is_still_that_window():
-    # The OM_1 16:37-17:28 case, the other straddle direction: an evening walk
+    # The OM_1 16:37-17:28 case, the other straddle direction: an afternoon walk
     # that set off early. Labelling the session by its start hour would drop
-    # the whole thing; by overlap it is correctly evening.
+    # the whole thing; by overlap it is correctly afternoon.
     cfg = MatchConfig(session_split_gap_s=1800.0)
     walk = _rows(pd.Timestamp("2026-03-09 16:37:00"), 620, step_s=5)  # 16:37-17:28
     out = label_sessions(sessionize(_cleaned(walk, stem="OM_1_20260309_16_51durmin__REC000135"), cfg), cfg)
 
-    assert set(out[SESSION_PERIOD_COL]) == {"evening"}
+    assert set(out[SESSION_PERIOD_COL]) == {"afternoon"}
     assert len(out) == 620
 
 
@@ -255,18 +255,18 @@ def test_a_session_too_long_to_be_a_walk_is_rejected():
 
 def test_idle_time_between_two_walks_splits_them_without_a_logging_gap():
     # The real OM_2 2025-12-29 case: a morning walk, four hours of the device
-    # sitting on a table still logging, then the evening walk. There is no
+    # sitting on a table still logging, then the afternoon walk. There is no
     # silence to cut on, so cutting on silence alone returns one 6.4 h
     # "session" that is neither walk.
     cfg = MatchConfig(session_split_gap_s=1800.0, max_stationary_gap_s=1200.0)
     morning = _rows(pd.Timestamp("2026-03-09 12:30:00"), 240)          # 20 min, moving
     idle = _rows(pd.Timestamp("2026-03-09 12:50:00"), 2400, step_m=0)  # 3 h20, still
-    evening = _rows(pd.Timestamp("2026-03-09 18:20:00"), 240, lat=-22.80)
-    out = label_sessions(sessionize(_cleaned(morning + idle + evening), cfg), cfg)
+    afternoon = _rows(pd.Timestamp("2026-03-09 18:20:00"), 240, lat=-22.80)
+    out = label_sessions(sessionize(_cleaned(morning + idle + afternoon), cfg), cfg)
 
     walks = out.dropna(subset=[SESSION_ID_COL])
     assert walks[SESSION_ID_COL].nunique() == 2
-    assert set(walks[SESSION_PERIOD_COL]) == {"morning", "evening"}
+    assert set(walks[SESSION_PERIOD_COL]) == {"morning", "afternoon"}
     # The idle block belongs to neither walk and is left for quarantine.
     assert out[SESSION_ID_COL].isna().sum() > 2000
 

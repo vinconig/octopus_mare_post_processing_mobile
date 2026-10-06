@@ -18,7 +18,7 @@ Two scopes live here, both upstream of the per-trip cleaning in cleaning.py:
   S2, one sensor's history (dedupe_rows / sessionize / label_sessions)
       Duplicate recordings and overlapping restarts are only visible once a
       sensor's files are pooled. And a *walk* is a contiguous run of samples,
-      so trips are cut on silence and only then labelled morning/evening —
+      so trips are cut on silence and only then labelled morning/afternoon —
       labelling row by row instead splits any walk that crosses a window edge.
 
 Everything here writes flags and never drops a row; scripts/make_trip_data.py
@@ -139,7 +139,7 @@ def _idle_mask(
     A run of samples that never leaves config.stationary_radius_m of where it
     started, and lasts longer than config.max_stationary_gap_s, is the device
     sitting somewhere — the sensor left running between the morning and the
-    evening walk, most often. The row that ends such a run is the first step
+    afternoon walk, most often. The row that ends such a run is the first step
     of the next walk and is kept; the run itself is not walk data.
 
     Samples with no usable fix carry no movement information, so they neither
@@ -220,7 +220,7 @@ def sessionize(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
 
 
 def label_sessions(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
-    """Label each whole session morning / evening (S2).
+    """Label each whole session morning / afternoon (S2).
 
     The classification is per session, not per row: a session belongs to the
     window it overlaps most, and to neither if it overlaps neither.
@@ -228,7 +228,7 @@ def label_sessions(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
     Both parts matter, because walks straddle a window edge in both
     directions. 13:44-14:58 is a morning walk that ran an hour long; testing
     its rows individually against [11, 14) keeps the first 15 minutes and
-    discards the other 59. 16:37-17:28 is an evening walk that set off early;
+    discards the other 59. 16:37-17:28 is an afternoon walk that set off early;
     labelling the session by its *start* hour instead would throw the whole
     thing away. Counting overlap gets both right, while a session recorded
     entirely outside both windows still matches neither and is quarantined by
@@ -253,13 +253,13 @@ def label_sessions(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
         {
             "session": timed[SESSION_ID_COL],
             "morning": hours.between(config.morning_hours[0], config.morning_hours[1] - 1),
-            "evening": hours.between(config.evening_hours[0], config.evening_hours[1] - 1),
+            "afternoon": hours.between(config.afternoon_hours[0], config.afternoon_hours[1] - 1),
             "ts": timed[TS_CLEAN_COL],
         }
     )
     overlap = per_session.groupby("session").agg(
         morning=("morning", "sum"),
-        evening=("evening", "sum"),
+        afternoon=("afternoon", "sum"),
         first=("ts", "min"),
         last=("ts", "max"),
     )
@@ -269,10 +269,10 @@ def label_sessions(df: pd.DataFrame, config: MatchConfig) -> pd.DataFrame:
         duration_s = (row["last"] - row["first"]).total_seconds()
         if duration_s > config.max_session_duration_s:
             df.loc[rows, SESSION_REJECT_COL] = "session_too_long"
-        elif row["morning"] == 0 and row["evening"] == 0:
+        elif row["morning"] == 0 and row["afternoon"] == 0:
             df.loc[rows, SESSION_REJECT_COL] = "session_off_window"
         else:
             df.loc[rows, SESSION_PERIOD_COL] = (
-                "morning" if row["morning"] >= row["evening"] else "evening"
+                "morning" if row["morning"] >= row["afternoon"] else "afternoon"
             )
     return df

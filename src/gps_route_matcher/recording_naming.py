@@ -7,7 +7,7 @@ pull in visualization.py's heavy plotting stack just to reuse this regex.
 Two conventions are supported:
   TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv     (data/OM_<n>_a_raw, the
       original per-recording exports; period is derived from the hour)
-  TRACK_YYYYMMDD_<morning|evening>_DURATIONdurmin.csv (data/OM_<n>_c_prepared,
+  TRACK_YYYYMMDD_<morning|afternoon>_DURATIONdurmin.csv (data/OM_<n>_c_prepared,
       one CSV per trip already; period is named directly, no recid)
 """
 
@@ -23,13 +23,13 @@ _RECORDING_FILENAME_RE = re.compile(
     r"^(?P<track>OM_\d+)_(?P<date>\d{8})_(?P<hour>\d{1,2})_(?P<duration>\d+)durmin__REC(?P<recid>\d+)$"
 )
 
-# e.g. "OM_1_20151019_evening_5durmin.csv" → track=OM_1, date=20151019,
-# period_word=evening, duration=5 (min). No recid: each (track, date, period)
+# e.g. "OM_1_20151019_afternoon_5durmin.csv" → track=OM_1, date=20151019,
+# period_word=afternoon, duration=5 (min). No recid: each (track, date, period)
 # has at most one file in data/OM_<n>_c_prepared.
 _TRIP_FILENAME_RE = re.compile(
-    r"^(?P<track>OM_\d+)_(?P<date>\d{8})_(?P<period_word>morning|evening)_(?P<duration>\d+)durmin$"
+    r"^(?P<track>OM_\d+)_(?P<date>\d{8})_(?P<period_word>morning|afternoon)_(?P<duration>\d+)durmin$"
 )
-_PERIOD_WORD_TO_PERIOD = {"morning": "manha", "evening": "tarde"}
+_PERIOD_WORD_TO_PERIOD = {"morning": "manha", "afternoon": "tarde"}
 
 # A handful of source filenames carry a garbage date (bad device clock at
 # recording time, e.g. year 2015 or 2027) that has nothing to do with GPS

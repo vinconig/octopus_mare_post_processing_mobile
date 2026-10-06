@@ -161,7 +161,7 @@ class MatchConfig:
     # would split a single walk that happens to cross a window edge.
     session_split_gap_s: float = 1800.0   # 30 min of silence ends a session
     # A walk also ends when the walking stops, which silence alone doesn't
-    # capture: a device left running between the morning and evening walk
+    # capture: a device left running between the morning and afternoon walk
     # never goes quiet, so gap-cutting alone returns both walks and the four
     # idle hours between them as one session. Samples that stay within
     # stationary_radius_m for longer than max_stationary_gap_s are idle time,
@@ -176,7 +176,7 @@ class MatchConfig:
     # with its GPS wandering a 350 km box.)
     max_session_duration_s: float = 10800.0     # 3 h
     morning_hours: tuple[int, int] = (11, 14)   # [start, end) hour
-    evening_hours: tuple[int, int] = (17, 20)   # [start, end) hour
+    afternoon_hours: tuple[int, int] = (17, 20)   # [start, end) hour
 
 
 @dataclass
