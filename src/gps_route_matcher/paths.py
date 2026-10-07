@@ -28,6 +28,8 @@ MATCHED_FOLDERS: list[str] = [f"{t}{MATCHED_SUFFIX}" for t in TRACKS]
 EDGE_ANALYSIS_FOLDERS: list[str] = [f"{t}{EDGE_ANALYSIS_SUFFIX}" for t in TRACKS]
 
 BAIRRO_KML_PATH: Path = PROJECT_ROOT / "borders" / "Bairro.kml"
+MARE_WHOLE_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_whole.kml"
+MARE_AREAS_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_areas.kml"
 CALIBRATION_EQUATIONS_PATH: Path = PROJECT_ROOT / "calibration" / "calibration_equations.csv"
 
 # Suffixes retired by the a/b/c/d/e rename (including the pre-"_raw" bare
