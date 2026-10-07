@@ -1,4 +1,4 @@
-from gps_route_matcher.visualization import generate_interactive_map_all_data_incl_edges, generate_hmm_debug_map
+from gps_route_matcher.visualization import generate_interactive_map_all_data_incl_edges, generate_interactive_map_debug, generate_hmm_debug_map
 import argparse
 import os
 import webbrowser
@@ -8,6 +8,7 @@ import infer_route
 import map_matching
 import route_edge_analysis
 import generate_map_info
+import find_dropped_points
 import generate_route_plots
 import generate_route_plots_publication
 import make_trip_data
@@ -62,10 +63,15 @@ if __name__ == "__main__":
     map_matching.map_match(folders=folders)
 
      #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_1_a_raw/OM_1_20251201_18_13durmin__REC000003.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_2_a_raw/OM_1_20251201_18_13durmin__REC000003.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
     print(f"Map saved to: {output_path}")
     if not no_browser:
         webbrowser.open(f"file://{output_path}")
+
+    #lists every run of consecutive dropped points (unresolved or matched off the inferred route) with the
+    #route edges of the valid anchors around it -> output/dropped_points/dropped_runs.csv, which the
+    #interactive map's debug GPS mode steps through
+    find_dropped_points.find_dropped_points(folders=folders)
 
     #edge analysis
     route_edge_analysis.route_edge_analysis(folders=folders)
@@ -86,6 +92,10 @@ if __name__ == "__main__":
     os.path.join(PROJECT_ROOT, "output", "interactivemaps", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
     if not no_browser:
         webbrowser.open(f"file://{output_path}")
+
+    #same map plus the Debug GPS overlay (steps through output/dropped_points/dropped_runs.csv), kept as its own file
+    output_path = generate_interactive_map_debug(
+    os.path.join(PROJECT_ROOT, "output", "interactivemaps", "interactive_map_debug.html"), folders=folders)
 
     #assembles a Zenodo-ready deposit (data/: slimmed mobile + edge-aggregated CSVs, empty fixed/;
     #metadata/: route metadata, OSM graph snapshot, calibration files) into

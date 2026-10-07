@@ -77,6 +77,18 @@ def _env_columns(df: pd.DataFrame) -> list[str]:
     return [c for c in df.columns if c not in _NON_ENV_COLUMNS]
 
 
+def edge_order_lookup(route_metadata: dict) -> dict[tuple[int, int, int], int]:
+    """{(u, v, key): edge_order} for a route's edges.
+
+    If the route backtracks over the same physical edge (rare, via-node
+    loop legs), the point data alone can't tell which visit a measurement
+    belongs to — last edge_order for that (u, v, key) wins.
+    Timestamps could disambiguate the visits, but no route has this problem yet,
+    so it can be handled if it actually comes up (otherwise: exclude such routes).
+    """
+    return {(e["u"], e["v"], e["key"]): e["edge_order"] for e in route_metadata["edges"]}
+
+
 def assign_points_to_edges(trip_df: pd.DataFrame, route_metadata: dict) -> pd.DataFrame:
     """Restrict a matched trip's rows to points assigned to an edge of the
     inferred route, and attach that edge's position (edge_order) in the route.
@@ -94,13 +106,7 @@ def assign_points_to_edges(trip_df: pd.DataFrame, route_metadata: dict) -> pd.Da
     for col in ("matched_edge_u", "matched_edge_v", "matched_edge_key"):
         df[col] = df[col].astype(int)
 
-    # If the route backtracks over the same physical edge (rare, via-node
-    # loop legs), the point data alone can't tell which visit a measurement
-    # belongs to — last edge_order for that (u, v, key) wins.
-    #you could do this via timestamps, but since none of the routes actually has this problem (yet) this can be handled better if it actually comes up, otherwise i would exclude routes that have this backtracking issue
-    edge_order_by_key = {
-        (e["u"], e["v"], e["key"]): e["edge_order"] for e in route_metadata["edges"]
-    }
+    edge_order_by_key = edge_order_lookup(route_metadata)
     df["edge_order"] = [
         edge_order_by_key.get((int(u), int(v), int(k)))
         for u, v, k in zip(df["matched_edge_u"], df["matched_edge_v"], df["matched_edge_key"])
