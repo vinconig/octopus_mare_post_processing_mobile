@@ -5,6 +5,7 @@ Observation cleaning and gap handling are reused from cleaning.py and gaps.py.
 
 Emission model:
     emission_cost = perpendicular_distance² / (2 · gps_sigma²)
+                    + off_route_penalty   (only for edges outside route_edges)
 
 Transition model (Newson–Krumm style):
     The plausibility of moving between two candidate positions is judged by
@@ -230,6 +231,10 @@ def generate_edge_candidates(
     filtered = filtered[: config.candidate_k]
 
     sigma2 = config.gps_sigma_m ** 2
+
+    def off_route_cost(edge: EdgeKey) -> float:
+        return config.off_route_penalty if route_edges and edge not in route_edges else 0.0
+
     return [
         EdgeCandidate(
             obs_index=obs_index,
@@ -237,7 +242,7 @@ def generate_edge_candidates(
             edge=index.edge_keys[ei],
             offset_m=offset,
             distance_m=d,
-            emission_cost=d ** 2 / (2.0 * sigma2),
+            emission_cost=d ** 2 / (2.0 * sigma2) + off_route_cost(index.edge_keys[ei]),
             x=px,
             y=py,
         )

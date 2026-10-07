@@ -760,3 +760,31 @@ def test_densified_offsets_clamp_to_the_inset_interval():
         assert config.node_inset_m <= c.offset_m <= length - config.node_inset_m
     # clamping collapses duplicates rather than emitting the same offset twice
     assert len({c.offset_m for c in stem}) == len(stem)
+
+
+# ── off-route penalty ───────────────────────────────────────────────────────
+
+
+def test_off_route_penalty_applies_only_to_edges_outside_the_route():
+    index = _t_junction_index()
+    base = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config(),
+                                    route_edges={(1, 2, 0)})
+    pen = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config(off_route_penalty=8.0),
+                                   route_edges={(1, 2, 0)})
+    by_edge = lambda cs: {c.edge: c.emission_cost for c in cs}
+    assert by_edge(pen)[(1, 2, 0)] == pytest.approx(by_edge(base)[(1, 2, 0)])
+    assert by_edge(pen)[(3, 4, 0)] == pytest.approx(by_edge(base)[(3, 4, 0)] + 8.0)
+
+
+def test_off_route_penalty_is_inert_without_route_edges():
+    """Route inference has no route; a configured penalty must not touch it."""
+    index = _t_junction_index()
+    plain = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config())
+    pen = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config(off_route_penalty=8.0))
+    assert [c.emission_cost for c in pen] == pytest.approx([c.emission_cost for c in plain])
+
+
+def test_final_matching_config_differs_only_in_sigma_and_penalty():
+    final, default = MatchConfig.for_final_matching(), MatchConfig()
+    assert final.gps_sigma_m == 5.0 and final.off_route_penalty > 0
+    assert default.gps_sigma_m == 0.25 and default.off_route_penalty == 0.0

@@ -83,7 +83,7 @@ def map_match(
     index = build_graph_index(graph)
     dist_cache = NetworkDistanceCache(index.graph_proj)
     transformer_inv = pyproj.Transformer.from_crs(index.crs_metric, "EPSG:4326", always_xy=True)
-    config = MatchConfig(infer_missing_timestamps=True)
+    config = MatchConfig.for_final_matching()
 
     target_tracks = folders if folders else TRACKS
     print(f"3/4 Matching CSV files in {target_tracks} …")

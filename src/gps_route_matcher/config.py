@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Final-matching values, tuned with scripts/tune_matching.py.
+FINAL_MATCH_GPS_SIGMA_M = 5.0
+FINAL_MATCH_OFF_ROUTE_PENALTY = 8.0
+
 
 @dataclass
 class MatchConfig:
@@ -19,14 +23,30 @@ class MatchConfig:
     lat_col: str = "Latitude"
 
     # ── GPS noise / candidate generation ───────────────────────────────────
-    # 1-σ GPS position error [m]. Deliberately far below the empirical residual
-    # (median ~5 m, p90 ~16 m): emission is d²/(2σ²) while the network detour
-    # term is |net - straight|/σ, so a small σ keeps geometry dominant over
-    # routing. Raising σ to the "correct" value lets the transition term take
-    # over and the matcher starts preferring shortest paths that backtrack over
-    # the route actually walked. Tuned empirically — do not raise it without
-    # re-checking that behaviour.
+    # 1-σ GPS position error [m]. This default is the ROUTE INFERENCE value
+    # and is deliberately far below the empirical residual (median ~5 m, p90
+    # ~16 m): emission is d²/(2σ²) while the network detour term is
+    # |net - straight|/σ, so a small σ keeps geometry dominant over routing.
+    # Raising σ to the "correct" value lets the transition term take over and
+    # the matcher starts preferring shortest paths that backtrack over the
+    # route actually walked — which inference, having no route to lean on,
+    # cannot afford. Tuned empirically.
+    #
+    # The final per-trip matching (scripts/map_matching.py) does have a route,
+    # so it uses MatchConfig.for_final_matching(): a realistic σ, with
+    # off_route_penalty below supplying the route preference that a tiny σ
+    # used to provide implicitly.
     gps_sigma_m: float = 0.25
+    # Flat cost (same units as the emission cost, i.e. σ-normalised squared
+    # distance) added to every candidate on an edge outside route_edges. Only
+    # applies when the caller passes route_edges, so route inference (which
+    # has no route) is unaffected. It is a soft preference, not a filter:
+    # a point sitting far from the route still matches off it, which is what
+    # lets days when the carrier walked a different way drop out downstream.
+    # With σ = 5 m, a penalty P lets an off-route street beat a route edge
+    # only when d_route² - d_off² > 2σ²·P, e.g. P = 8 → d_route > 20 m for an
+    # off-route street the fix sits directly on.
+    off_route_penalty: float = 0.0
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
     candidate_k: int = 30               # max candidates per observation
 
@@ -177,6 +197,19 @@ class MatchConfig:
     max_session_duration_s: float = 10800.0     # 3 h
     morning_hours: tuple[int, int] = (11, 14)   # [start, end) hour
     afternoon_hours: tuple[int, int] = (17, 20)   # [start, end) hour
+
+    @classmethod
+    def for_final_matching(cls, **overrides) -> "MatchConfig":
+        """Config for the final per-trip matching, where the inferred route is
+        known: realistic σ plus a penalty on off-route candidates. Route
+        inference keeps the plain defaults (see gps_sigma_m)."""
+        params = dict(
+            infer_missing_timestamps=True,
+            gps_sigma_m=FINAL_MATCH_GPS_SIGMA_M,
+            off_route_penalty=FINAL_MATCH_OFF_ROUTE_PENALTY,
+        )
+        params.update(overrides)
+        return cls(**params)
 
 
 @dataclass
