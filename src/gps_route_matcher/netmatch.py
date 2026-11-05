@@ -141,6 +141,7 @@ class EdgeCandidate:
     emission_cost: float
     x: float               # projected metric coords of the matched position
     y: float
+    off_route_cost: float = 0.0   # the part of emission_cost that is off_route_penalty
 
 
 def _candidate_offsets(
@@ -245,6 +246,7 @@ def generate_edge_candidates(
             emission_cost=d ** 2 / (2.0 * sigma2) + off_route_cost(index.edge_keys[ei]),
             x=px,
             y=py,
+            off_route_cost=off_route_cost(index.edge_keys[ei]),
         )
         for d, ei, offset, px, py in filtered
     ]
@@ -263,6 +265,12 @@ class CandidateTraceRow:
     is_on_winning_path is set True, after backtracking, for exactly the
     candidates Viterbi actually selected. lon/lat are filled in bulk by
     match_trip_to_network_rows (from x/y) once the DP work is done.
+
+    The costs are also kept split into their terms, so a debug view can show
+    which penalty drove a choice. emission_cost = distance term +
+    off_route_cost; transition_cost = detour_cost + speed_cost +
+    reversal_cost + blocked_cost, taken for the same best predecessor
+    transition_cost is. The transition terms are None where transition_cost is.
     """
 
     obs_index: int
@@ -281,6 +289,67 @@ class CandidateTraceRow:
     is_on_winning_path: bool = False
     lon: float | None = None
     lat: float | None = None
+    off_route_cost: float = 0.0
+    detour_cost: float | None = None
+    speed_cost: float | None = None
+    reversal_cost: float | None = None
+    blocked_cost: float | None = None
+
+
+_K_BEST_PATHS = 2   # path_sink keeps this many distinct-street-sequence paths per candidate
+
+
+def street_key(edge: EdgeKey) -> EdgeKey:
+    """Direction-agnostic identity of an edge: (u, v, key) and its reverse twin
+    (v, u, key) are the same physical street. Path alternatives are told apart
+    by this, since walking the same streets the other way round (same geometry,
+    same cost) is not a different route."""
+    u, v, key = edge
+    return (u, v, key) if u <= v else (v, u, key)
+
+
+@dataclass
+class PathEntry:
+    """One of the cheapest partial paths ending at a candidate (list-Viterbi).
+
+    Populated only when a path_sink list is passed into
+    match_trip_to_network_rows / _match_usable_segments / _viterbi_segment;
+    the matcher's normal single-best DP is untouched either way. Each
+    candidate keeps up to _K_BEST_PATHS entries with *distinct street sequences*
+    (consecutive duplicates collapsed, so candidates that differ only by
+    offset along one edge are the same path, and so are the two directions of
+    one street: see street_key); rank 0 is the cheapest.
+
+    That top-K per candidate is exact: a transition's cost depends only on its
+    two end states, so for each (state, street sequence) only the cheapest path
+    matters, and a path with two better distinct prefixes at a state can never
+    be among the global top-K. Hence the rank-0 chain from the best final
+    candidate is exactly the Viterbi path, and the chosen path's prefix is the
+    rank-0 entry at every step.
+
+    id is the entry's index in path_sink (parents always precede children).
+    sig identifies the collapsed street sequence. The cum_* fields are the
+    path's cost since segment start split into terms; they add up to
+    cumulative_cost (emission = distance + off_route per step, transition =
+    detour + speed + reversal + blocked).
+    """
+
+    id: int
+    segment_id: int
+    obs_index: int
+    candidate_idx: int
+    edge: EdgeKey
+    rank: int
+    parent_id: int | None
+    sig: int
+    cumulative_cost: float
+    cum_distance: float
+    cum_off_route: float
+    cum_detour: float
+    cum_speed: float
+    cum_reversal: float
+    cum_blocked: float
+    is_on_winning_path: bool = False
 
 
 # ── Network distances ─────────────────────────────────────────────────────────
@@ -349,6 +418,33 @@ class NetworkDistanceCache:
 # ── Transition cost ───────────────────────────────────────────────────────────
 
 
+def network_transition_cost_terms(
+    net_dist_m: float,
+    straight_dist_m: float,
+    dt_s: float,
+    config: MatchConfig,
+) -> tuple[float, float, float]:
+    """network_transition_cost split into (detour, speed, blocked) terms.
+
+    blocked is _LARGE_COST for an unreachable pair (or movement in zero time)
+    and 0 otherwise; the other two are zero in that case.
+    """
+    if math.isinf(net_dist_m):
+        return 0.0, 0.0, _LARGE_COST
+    if dt_s <= 0:
+        return 0.0, 0.0, (0.0 if net_dist_m < 1e-3 else _LARGE_COST)
+
+    detour = abs(net_dist_m - straight_dist_m)
+    # Scale like the emission term so the two are comparable (β ≈ σ).
+    detour_cost = detour / config.gps_sigma_m
+
+    speed = net_dist_m / dt_s
+    speed_cost = 0.0
+    if speed > config.max_speed_mps:
+        speed_cost = config.high_speed_penalty * (speed - config.max_speed_mps) ** 2
+    return detour_cost, speed_cost, 0.0
+
+
 def network_transition_cost(
     net_dist_m: float,
     straight_dist_m: float,
@@ -366,19 +462,7 @@ def network_transition_cost(
        quadratically, so a large dt legitimately allows a large distance
        (this is the whole point of using real dt in gaps).
     """
-    if math.isinf(net_dist_m):
-        return _LARGE_COST
-    if dt_s <= 0:
-        return 0.0 if net_dist_m < 1e-3 else _LARGE_COST
-
-    detour = abs(net_dist_m - straight_dist_m)
-    # Scale like the emission term so the two are comparable (β ≈ σ).
-    cost = detour / config.gps_sigma_m
-
-    speed = net_dist_m / dt_s
-    if speed > config.max_speed_mps:
-        cost += config.high_speed_penalty * (speed - config.max_speed_mps) ** 2
-    return cost
+    return sum(network_transition_cost_terms(net_dist_m, straight_dist_m, dt_s, config))
 
 
 def _is_reversal(prev: EdgeCandidate, curr: EdgeCandidate) -> bool:
@@ -416,6 +500,7 @@ def _viterbi_segment(
     config: MatchConfig,
     segment_id: int = -1,
     trace_sink: list[CandidateTraceRow] | None = None,
+    path_sink: list[PathEntry] | None = None,
 ) -> list[EdgeCandidate]:
     """Minimum-cost candidate path for one segment (Viterbi/DP).
 
@@ -424,6 +509,11 @@ def _viterbi_segment(
     the transition cost from whichever predecessor the DP selected as best
     for it, and the resulting cumulative cost — the same values the DP
     itself computes, just stashed instead of discarded.
+
+    If path_sink is given, the top _K_BEST_PATHS distinct-edge-sequence paths
+    per candidate are appended to it as PathEntry rows (see there), built from
+    the same per-pair costs the DP already computes. The returned path and the
+    DP's own bookkeeping are the same with or without it.
     """
     steps = [(oi, ts, x, y) for oi, ts, x, y in obs if cands.get(oi)]
     if not steps:
@@ -433,6 +523,21 @@ def _viterbi_segment(
     costs = np.array([c.emission_cost for c in first])
     back: list[list[int]] = [[-1] * len(first)]
     all_cands: list[list[EdgeCandidate]] = [first]
+    all_entries: list[list[list[PathEntry]]] | None = None
+    if path_sink is not None:
+        step0: list[list[PathEntry]] = []
+        for kc, cc in enumerate(first):
+            entry = PathEntry(
+                id=len(path_sink), segment_id=segment_id, obs_index=cc.obs_index,
+                candidate_idx=kc, edge=cc.edge, rank=0, parent_id=None,
+                sig=hash((street_key(cc.edge),)), cumulative_cost=float(cc.emission_cost),
+                cum_distance=cc.emission_cost - cc.off_route_cost,
+                cum_off_route=cc.off_route_cost,
+                cum_detour=0.0, cum_speed=0.0, cum_reversal=0.0, cum_blocked=0.0,
+            )
+            path_sink.append(entry)
+            step0.append([entry])
+        all_entries = [step0]
     trace_rows: list[list[CandidateTraceRow]] | None = None
     if trace_sink is not None:
         trace_rows = [[
@@ -442,6 +547,7 @@ def _viterbi_segment(
                 emission_cost=cc.emission_cost, x=cc.x, y=cc.y,
                 pred_obs_index=None, pred_candidate_idx=None,
                 transition_cost=None, cumulative_cost=float(costs[kc]),
+                off_route_cost=cc.off_route_cost,
             )
             for kc, cc in enumerate(first)
         ]]
@@ -460,17 +566,61 @@ def _viterbi_segment(
         new_costs = np.full(len(curr), _LARGE_COST)
         bp = np.zeros(len(curr), dtype=int)
         best_trans = np.full(len(curr), np.nan)
+        best_terms: list[tuple[float, float, float, float]] = [(math.nan,) * 4] * len(curr)
+        prev_entries = all_entries[-1] if all_entries is not None else None
+        curr_entries: list[list[PathEntry]] = []
         for kc, cc in enumerate(curr):
+            # (cost, parent entry, (detour, speed, reversal, blocked), sig) per
+            # way of reaching cc; only collected when path_sink is on.
+            proposals: list[tuple[float, PathEntry, tuple[float, float, float, float], int]] = []
             for jc, pc in enumerate(prev):
                 nd = dist_cache.route_distance(pc, cc, index.edge_lengths, cutoff)
-                trans_cost = network_transition_cost(nd, straight, dt_s, config)
-                if _is_reversal(pc, cc):
-                    trans_cost += config.network_reversal_penalty
+                detour_c, speed_c, blocked_c = network_transition_cost_terms(
+                    nd, straight, dt_s, config
+                )
+                reversal_c = config.network_reversal_penalty if _is_reversal(pc, cc) else 0.0
+                trans_cost = detour_c + speed_c + blocked_c + reversal_c
                 c = costs[jc] + trans_cost + cc.emission_cost
                 if c < new_costs[kc]:
                     new_costs[kc] = c
                     bp[kc] = jc
                     best_trans[kc] = trans_cost
+                    best_terms[kc] = (detour_c, speed_c, reversal_c, blocked_c)
+                if prev_entries is not None:
+                    same_street = street_key(pc.edge) == street_key(cc.edge)
+                    for pe in prev_entries[jc]:
+                        proposals.append((
+                            pe.cumulative_cost + trans_cost + cc.emission_cost,
+                            pe,
+                            (detour_c, speed_c, reversal_c, blocked_c),
+                            pe.sig if same_street else hash((pe.sig, street_key(cc.edge))),
+                        ))
+            if prev_entries is not None:
+                # Cheapest per distinct street sequence (first wins ties, like the
+                # DP's strict <), then the _K_BEST_PATHS cheapest of those.
+                best_by_sig: dict[int, tuple] = {}
+                for prop in proposals:
+                    if prop[3] not in best_by_sig or prop[0] < best_by_sig[prop[3]][0]:
+                        best_by_sig[prop[3]] = prop
+                kept = sorted(best_by_sig.values(), key=lambda p: p[0])[:_K_BEST_PATHS]
+                kc_entries = []
+                for rank, (cost, pe, (det, spd, rev, blk), sig) in enumerate(kept):
+                    entry = PathEntry(
+                        id=len(path_sink), segment_id=segment_id, obs_index=cc.obs_index,
+                        candidate_idx=kc, edge=cc.edge, rank=rank, parent_id=pe.id,
+                        sig=sig, cumulative_cost=cost,
+                        cum_distance=pe.cum_distance + cc.emission_cost - cc.off_route_cost,
+                        cum_off_route=pe.cum_off_route + cc.off_route_cost,
+                        cum_detour=pe.cum_detour + det,
+                        cum_speed=pe.cum_speed + spd,
+                        cum_reversal=pe.cum_reversal + rev,
+                        cum_blocked=pe.cum_blocked + blk,
+                    )
+                    path_sink.append(entry)
+                    kc_entries.append(entry)
+                curr_entries.append(kc_entries)
+        if all_entries is not None:
+            all_entries.append(curr_entries)
         costs = new_costs
         back.append(bp.tolist())
         all_cands.append(curr)
@@ -485,6 +635,11 @@ def _viterbi_segment(
                     pred_candidate_idx=int(bp[kc]),
                     transition_cost=float(best_trans[kc]),
                     cumulative_cost=float(costs[kc]),
+                    off_route_cost=cc.off_route_cost,
+                    detour_cost=best_terms[kc][0],
+                    speed_cost=best_terms[kc][1],
+                    reversal_cost=best_terms[kc][2],
+                    blocked_cost=best_terms[kc][3],
                 )
                 for kc, cc in enumerate(curr)
             ])
@@ -501,6 +656,15 @@ def _viterbi_segment(
             trace_rows[t][k].is_on_winning_path = True
         for rows in trace_rows:
             trace_sink.extend(rows)
+
+    if all_entries is not None:
+        # The chosen path is the rank-0 chain from the best final candidate.
+        entry = all_entries[-1][path[-1]][0]
+        while True:
+            entry.is_on_winning_path = True
+            if entry.parent_id is None:
+                break
+            entry = path_sink[entry.parent_id]
 
     return [all_cands[t][k] for t, k in enumerate(path)]
 
@@ -572,6 +736,7 @@ def _match_usable_segments(
     dist_cache: NetworkDistanceCache,
     trace_sink: list[CandidateTraceRow] | None = None,
     route_edges: set[EdgeKey] | None = None,
+    path_sink: list[PathEntry] | None = None,
 ) -> list[tuple[int, list[EdgeCandidate]]]:
     """Generate edge candidates for every usable row and run per-segment Viterbi.
 
@@ -613,7 +778,7 @@ def _match_usable_segments(
                 obs.append((oi, row["timestamp"], x, y))
         path = _viterbi_segment(
             obs, cands, dist_cache, index, config,
-            segment_id=int(seg_id), trace_sink=trace_sink,
+            segment_id=int(seg_id), trace_sink=trace_sink, path_sink=path_sink,
         )
         if path:
             segment_paths.append((int(seg_id), path))
@@ -897,6 +1062,7 @@ def match_trip_to_network_rows(
     polygon=None,
     trace_sink: list[CandidateTraceRow] | None = None,
     route_edges: set[EdgeKey] | None = None,
+    path_sink: list[PathEntry] | None = None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
     enriched dataframe.
@@ -936,6 +1102,11 @@ def match_trip_to_network_rows(
     path. Used by visualization.generate_hmm_debug_map; has no effect on the
     returned dataframe or on behavior when left as None.
 
+    If `path_sink` is given (an empty list), it is filled with PathEntry rows:
+    for every candidate, its cheapest partial paths with distinct street
+    sequences (list-Viterbi, top 2) and each path's cost split into terms.
+    Off by default — it is extra work only the debug map needs.
+
     If `route_edges` is given (the {(u, v, key)} set of this trip's inferred
     route, as written by route_inference.save_route_metadata), those edges get
     config.route_candidates_per_edge candidate positions each instead of one —
@@ -951,7 +1122,8 @@ def match_trip_to_network_rows(
     df = prepare_for_matching(trip_df, config, route=route, polygon=polygon)
 
     seg_pairs = _match_usable_segments(
-        df, index, config, dist_cache, trace_sink=trace_sink, route_edges=route_edges
+        df, index, config, dist_cache, trace_sink=trace_sink, route_edges=route_edges,
+        path_sink=path_sink,
     )
     if trace_sink:
         xs = np.array([r.x for r in trace_sink])

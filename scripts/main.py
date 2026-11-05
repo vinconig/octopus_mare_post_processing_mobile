@@ -63,7 +63,7 @@ if __name__ == "__main__":
     map_matching.map_match(folders=folders)
 
      #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_2_a_raw/OM_1_20251201_18_13durmin__REC000003.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
+    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_1_c_prepared/OM_1_20251216_afternoon_9durmin.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
     print(f"Map saved to: {output_path}")
     if not no_browser:
         webbrowser.open(f"file://{output_path}")
