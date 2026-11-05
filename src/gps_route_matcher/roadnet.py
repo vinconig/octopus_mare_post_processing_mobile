@@ -17,6 +17,12 @@ from .paths import PROJECT_ROOT
 
 ROADNETWORK_DIR: Path = PROJECT_ROOT / "roadnetwork"
 
+# The one road graph every stage uses (walk network, pulled from OSM on 2026-11-04 after
+# segment edits). Hard-coded on purpose: this was the last planned refresh.
+ROAD_GRAPH_PATH: Path = ROADNETWORK_DIR / "mare_openstreetmap_road_graph_2026-11-04.graphml"
+# The pre-refresh snapshot (pulled 2026-08-01), kept only in case it's needed again.
+OLD_ROAD_GRAPH_PATH: Path = ROADNETWORK_DIR / "bairro_walk_old.graphml"
+
 
 def download_road_graph(
     polygon: Polygon, network_type: str = "all", force_refresh: bool = False
@@ -63,13 +69,13 @@ def load_road_graph(path: str | Path) -> nx.MultiDiGraph:
 
 def get_road_graph(
     polygon: Polygon,
-    network_type: str = "all",
+    network_type: str = "walk",
     cache_path: str | Path | None = None,
     force_refresh: bool = False,
 ) -> nx.MultiDiGraph:
     """Return the road graph for the polygon, using the on-disk cache if present.
 
-    The default cache location is repopath/roadnetwork/bairro_<type>.graphml.
+    The default cache location is ROAD_GRAPH_PATH, whatever the network_type.
 
     force_refresh:
         Ignore both this GraphML cache and osmnx's own Overpass response
@@ -77,7 +83,7 @@ def get_road_graph(
         editing OSM data (e.g. tagging a footway) that should now show up.
     """
     if cache_path is None:
-        cache_path = ROADNETWORK_DIR / f"bairro_{network_type}.graphml"
+        cache_path = ROAD_GRAPH_PATH
     cache_path = Path(cache_path)
 
     if cache_path.exists() and not force_refresh:

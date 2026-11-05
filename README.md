@@ -51,7 +51,7 @@ Each stage reads the previous stage's output directory and writes a new one. Fol
 ### Filesystem conventions
 
 - `paths.PROJECT_ROOT` is derived from the installed package location (`src/gps_route_matcher/paths.py`), not cwd — always import it rather than hardcoding paths. `paths.py` also owns the track list (`TRACKS`) and every stage's folder suffix — import these rather than re-deriving a folder name locally.
-- `roadnet.py` caches the downloaded OSM graph under `roadnetwork/`; `route_inference.py` reads/writes `routes/`.
+- `roadnet.py` caches the downloaded OSM graph under `roadnetwork/`. Every stage uses the one hard-coded `roadnet.ROAD_GRAPH_PATH` (`mare_openstreetmap_road_graph_<date_of_pull>.graphml`, the final refresh); the pre-refresh graph is kept as `bairro_walk_old.graphml` (`OLD_ROAD_GRAPH_PATH`) and nothing reads it. `route_inference.py` reads/writes `routes/`.
 - Recording filenames follow one of two conventions, parsed centrally by `recording_naming.py` (used by both `visualization.py` and `analysis.py` so the regex logic isn't duplicated):
   - `OM_n_YYYYMMDD_HH_Ddurmin__RECrecid.csv` — raw per-recording exports (`data/OM_n_a_raw/`)
   - `OM_n_YYYYMMDD_<morning|afternoon>_Ddurmin.csv` — one file per trip (`data/OM_n_c_prepared/`)

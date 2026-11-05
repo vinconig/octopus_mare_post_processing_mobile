@@ -26,7 +26,7 @@ whitelist treatment (temperature, humidity and calibrated pm2.5 stats only,
 local-time timestamps). Also copies the companion files needed to make the
 export reproducible/self-contained, under metadata/: each track's
 routes/route_metadata/<track>_inferred_route.json (the edge_order/u,v,key
-anchor) -> metadata/route_metadata/, roadnetwork/bairro_walk.graphml (the OSM
+anchor) -> metadata/route_metadata/, roadnetwork/mare_openstreetmap_road_graph_2026-11-04.graphml (the OSM
 snapshot those ids refer to) -> metadata/roadnetwork/, and
 calibration/calibration_equations.csv + calibration/cross_validation_metrics.csv
 (needed to interpret pm2.5) -> metadata/calibration_metadata/.
@@ -54,7 +54,7 @@ from gps_route_matcher.paths import (
     TRACKS,
 )
 from gps_route_matcher.recording_naming import _parse_recording_filename, _TRIP_FILENAME_RE
-from gps_route_matcher.roadnet import ROADNETWORK_DIR
+from gps_route_matcher.roadnet import ROAD_GRAPH_PATH
 from gps_route_matcher.zenodo_columns import (
     EDGE_ANALYSIS_COLUMNS,
     MATCHED_COLUMNS,
@@ -217,7 +217,7 @@ def package_for_zenodo(
             n_edge_analysis_files += 1
 
     print("2/3 Copying companion files (OSM graph snapshot, calibration) …")
-    shutil.copy2(ROADNETWORK_DIR / "bairro_walk.graphml", roadnetwork_out / "bairro_walk.graphml")
+    shutil.copy2(ROAD_GRAPH_PATH, roadnetwork_out / ROAD_GRAPH_PATH.name)
     shutil.copy2(CALIBRATION_EQUATIONS_PATH, calibration_out / CALIBRATION_EQUATIONS_PATH.name)
     cross_val_path = CALIBRATION_EQUATIONS_PATH.parent / "cross_validation_metrics.csv"
     shutil.copy2(cross_val_path, calibration_out / cross_val_path.name)
