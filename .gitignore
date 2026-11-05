@@ -50,6 +50,12 @@ token.json
 mapdata/icons/
 scripts/OO_data_temp.py
 
+# Local-only: machine-specific / temporary / scratch files
+tickets.py
+scripts/tmp_export_for_cassiano.py
+borders/mare_whole_old.kml
+notebooks/map_matching_publication.ipynb
+
 #Claude Code
 # Ignore .claude/* rather than .claude itself: git won't descend into an
 # ignored directory, so the negation below only works if the directory stays
