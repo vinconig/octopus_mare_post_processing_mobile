@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # Final-matching values, tuned with scripts/tune_matching.py.
-FINAL_MATCH_GPS_SIGMA_M = 5.0
+FINAL_MATCH_GPS_SIGMA_M = 0.25
 FINAL_MATCH_OFF_ROUTE_PENALTY = 8.0
 
 
@@ -33,9 +33,8 @@ class MatchConfig:
     # cannot afford. Tuned empirically.
     #
     # The final per-trip matching (scripts/map_matching.py) does have a route,
-    # so it uses MatchConfig.for_final_matching(): a realistic σ, with
-    # off_route_penalty below supplying the route preference that a tiny σ
-    # used to provide implicitly.
+    # so it uses MatchConfig.for_final_matching(): the same σ, plus the
+    # off_route_penalty below for the route preference.
     gps_sigma_m: float = 0.25
     # Flat cost (same units as the emission cost, i.e. σ-normalised squared
     # distance) added to every candidate on an edge outside route_edges. Only
@@ -43,9 +42,10 @@ class MatchConfig:
     # has no route) is unaffected. It is a soft preference, not a filter:
     # a point sitting far from the route still matches off it, which is what
     # lets days when the carrier walked a different way drop out downstream.
-    # With σ = 5 m, a penalty P lets an off-route street beat a route edge
-    # only when d_route² - d_off² > 2σ²·P, e.g. P = 8 → d_route > 20 m for an
-    # off-route street the fix sits directly on.
+    # A penalty P lets an off-route street beat a route edge only when
+    # d_route² - d_off² > 2σ²·P. At σ = 0.25 m that is 0.125·P m², so
+    # P = 8 → d_route > 1 m for an off-route street the fix sits directly on;
+    # P = 1000 → d_route > ~11 m.
     off_route_penalty: float = 0.0
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
     candidate_k: int = 30               # max candidates per observation
