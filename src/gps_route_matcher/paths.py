@@ -27,6 +27,9 @@ PREPARED_FOLDERS: list[str] = [f"{t}{PREPARED_SUFFIX}" for t in TRACKS]
 MATCHED_FOLDERS: list[str] = [f"{t}{MATCHED_SUFFIX}" for t in TRACKS]
 EDGE_ANALYSIS_FOLDERS: list[str] = [f"{t}{EDGE_ANALYSIS_SUFFIX}" for t in TRACKS]
 
+# Per-config matched rows cached by scripts/sweep_dropped_points.py (regenerable).
+SWEEP_DIR: Path = PROJECT_ROOT / "output" / "sweep_dropped_points"
+
 BAIRRO_KML_PATH: Path = PROJECT_ROOT / "borders" / "Bairro.kml"
 MARE_WHOLE_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_whole.kml"
 MARE_AREAS_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_areas.kml"
