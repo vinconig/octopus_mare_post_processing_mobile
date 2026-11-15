@@ -5,8 +5,38 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # Final-matching values, tuned with scripts/tune_matching.py.
-FINAL_MATCH_GPS_SIGMA_M = 0.25
-FINAL_MATCH_OFF_ROUTE_PENALTY = 8.0
+FINAL_MATCH_GPS_SIGMA_M = 0.15
+FINAL_MATCH_OFF_ROUTE_PENALTY = 1000.0
+# Applies only to the hand-curated edges in curation/edge_bonus.json (see
+# MatchConfig.route_edge_bonus); a no-op for tracks with no curated edges.
+FINAL_MATCH_ROUTE_EDGE_BONUS = 30.0
+
+# Per-track final-matching settings, keyed by bare track name. A track listed
+# here overrides the FINAL_MATCH_* defaults above for just the fields it names;
+# a track not listed (or None) gets the defaults. Chosen per track from the
+# scripts/sweep_dropped_points.py debug map. Keys are MatchConfig field names.
+FINAL_MATCH_OVERRIDES: dict[str, dict[str, float]] = {
+    "OM_2": {
+        "gps_sigma_m": 5.0,
+        "off_route_penalty": 500.0,
+        "route_edge_bonus": 1000.0,
+    },
+    "OM_1": {
+        "gps_sigma_m": 5.0,
+        "off_route_penalty": 10.0,
+        "route_edge_bonus": 5000.0,
+    },
+    "OM_3": {
+        "gps_sigma_m": 0.25,
+        "off_route_penalty": 0.0,
+        "route_edge_bonus": 0.0,
+    },
+    "OM_4": {
+        "gps_sigma_m": 5.0,
+        "off_route_penalty": 10.0,
+        "route_edge_bonus": 0.0,
+    },
+}
 
 
 @dataclass
@@ -35,7 +65,7 @@ class MatchConfig:
     # The final per-trip matching (scripts/map_matching.py) does have a route,
     # so it uses MatchConfig.for_final_matching(): the same σ, plus the
     # off_route_penalty below for the route preference.
-    gps_sigma_m: float = 0.25
+    gps_sigma_m: float = 0.1
     # Flat cost (same units as the emission cost, i.e. σ-normalised squared
     # distance) added to every candidate on an edge outside route_edges. Only
     # applies when the caller passes route_edges, so route inference (which
@@ -47,6 +77,18 @@ class MatchConfig:
     # P = 8 → d_route > 1 m for an off-route street the fix sits directly on;
     # P = 1000 → d_route > ~11 m.
     off_route_penalty: float = 0.0
+    # The local counterpart of off_route_penalty: a cost REDUCTION (same units)
+    # for candidates on the hand-curated `bonus_edges` the caller passes in
+    # (curation/edge_bonus.json) - route edges where the GPS fix sits between
+    # the route and a neighbouring street and the route should get a slight
+    # edge. A uniform bonus on every route edge would be identical to raising
+    # off_route_penalty (Viterbi only sees cost differences), so it is only
+    # meaningful applied selectively. A bonus b on route edge A is equivalent to
+    # +b penalty on its rival B, and flips a contest when
+    # d_route² - d_off² < 2σ²·b: at σ = 0.15 m, b = 300 is ~13 m² on top of the
+    # ~45 m² the penalty already buys; the final-matching default b = 30 is a
+    # very mild ~1.4 m². Only applies when bonus_edges is passed.
+    route_edge_bonus: float = 0.0
     candidate_radius_m: float = 50.0   # max distance to consider a candidate
     candidate_k: int = 30               # max candidates per observation
 
@@ -199,15 +241,21 @@ class MatchConfig:
     afternoon_hours: tuple[int, int] = (17, 20)   # [start, end) hour
 
     @classmethod
-    def for_final_matching(cls, **overrides) -> "MatchConfig":
+    def for_final_matching(cls, track: str | None = None, **overrides) -> "MatchConfig":
         """Config for the final per-trip matching, where the inferred route is
         known: realistic σ plus a penalty on off-route candidates. Route
-        inference keeps the plain defaults (see gps_sigma_m)."""
+        inference keeps the plain defaults (see gps_sigma_m).
+
+        `track` (bare name, e.g. "OM_1") applies that track's entry in
+        FINAL_MATCH_OVERRIDES on top of the defaults; explicit keyword
+        overrides (as the sweep/tune scripts pass) win over both."""
         params = dict(
             infer_missing_timestamps=True,
             gps_sigma_m=FINAL_MATCH_GPS_SIGMA_M,
             off_route_penalty=FINAL_MATCH_OFF_ROUTE_PENALTY,
+            route_edge_bonus=FINAL_MATCH_ROUTE_EDGE_BONUS,
         )
+        params.update(FINAL_MATCH_OVERRIDES.get(track, {}) if track else {})
         params.update(overrides)
         return cls(**params)
 

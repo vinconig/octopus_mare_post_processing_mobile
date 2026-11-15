@@ -181,6 +181,7 @@ def generate_edge_candidates(
     obs_index: int,
     config: MatchConfig,
     route_edges: set[EdgeKey] | None = None,
+    bonus_edges: set[EdgeKey] | None = None,
 ) -> list[EdgeCandidate]:
     """Return up to candidate_k candidate positions for one GPS observation.
 
@@ -196,6 +197,12 @@ def generate_edge_candidates(
     its single nearest position, and the added positions are strictly farther
     from the GPS fix than their own edge's nearest projection — so this widens
     the state space without making any route edge cheaper to match.
+
+    bonus_edges, when given, is the hand-curated subset of route edges that get
+    config.route_edge_bonus subtracted from their emission cost (the local
+    counterpart of off_route_penalty; see MatchConfig.route_edge_bonus). It is
+    carried in the candidate's off_route_cost field as a negative number, so the
+    cumulative-cost decomposition and the debug maps need no changes.
     """
     x, y = index.transformer_fwd.transform(lon, lat)
 
@@ -234,6 +241,9 @@ def generate_edge_candidates(
     sigma2 = config.gps_sigma_m ** 2
 
     def off_route_cost(edge: EdgeKey) -> float:
+        # The route prior: + penalty off the route, - bonus on a curated edge.
+        if bonus_edges and edge in bonus_edges:
+            return -config.route_edge_bonus
         return config.off_route_penalty if route_edges and edge not in route_edges else 0.0
 
     return [
@@ -737,6 +747,7 @@ def _match_usable_segments(
     trace_sink: list[CandidateTraceRow] | None = None,
     route_edges: set[EdgeKey] | None = None,
     path_sink: list[PathEntry] | None = None,
+    bonus_edges: set[EdgeKey] | None = None,
 ) -> list[tuple[int, list[EdgeCandidate]]]:
     """Generate edge candidates for every usable row and run per-segment Viterbi.
 
@@ -745,8 +756,9 @@ def _match_usable_segments(
     lat, timestamp all present). Shared by match_trip_to_network and
     match_trip_to_network_rows so the two never diverge.
 
-    route_edges is passed straight through to generate_edge_candidates (see
-    there); None means one candidate position per nearby edge.
+    route_edges and bonus_edges are passed straight through to
+    generate_edge_candidates (see there); route_edges=None means one candidate
+    position per nearby edge.
 
     Returns (segment_id, winning EdgeCandidate list) pairs, in
     usable["segment_id"].unique() order, skipping segments that produced no
@@ -761,7 +773,8 @@ def _match_usable_segments(
     for _, row in usable.iterrows():
         oi = int(row["original_index"])
         cl = generate_edge_candidates(
-            index, float(row["lon"]), float(row["lat"]), oi, config, route_edges=route_edges
+            index, float(row["lon"]), float(row["lat"]), oi, config,
+            route_edges=route_edges, bonus_edges=bonus_edges,
         )
         if cl:
             cands[oi] = cl
@@ -851,6 +864,7 @@ def match_trip_to_network(
     dist_cache: NetworkDistanceCache | None = None,
     route_edges: set[EdgeKey] | None = None,
     polygon=None,
+    bonus_edges: set[EdgeKey] | None = None,
 ) -> TripMatchResult:
     """Match one trip's GPS points to the road network.
 
@@ -862,7 +876,8 @@ def match_trip_to_network(
     (the road graph was built from that same boundary, so a fix beyond it has
     no edges it could honestly belong to).
 
-    route_edges is passed through to generate_edge_candidates (see there).
+    route_edges and bonus_edges are passed through to generate_edge_candidates
+    (see there).
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
@@ -873,7 +888,9 @@ def match_trip_to_network(
     df = prepare_for_matching(trip_df, config, polygon=polygon)
 
     n_total = len(df)
-    seg_pairs = _match_usable_segments(df, index, config, dist_cache, route_edges=route_edges)
+    seg_pairs = _match_usable_segments(
+        df, index, config, dist_cache, route_edges=route_edges, bonus_edges=bonus_edges,
+    )
     if not seg_pairs:
         return TripMatchResult(trip_id, [], n_total, 0, 0, 0)
     segment_paths = [path for _, path in seg_pairs]
@@ -1063,6 +1080,7 @@ def match_trip_to_network_rows(
     trace_sink: list[CandidateTraceRow] | None = None,
     route_edges: set[EdgeKey] | None = None,
     path_sink: list[PathEntry] | None = None,
+    bonus_edges: set[EdgeKey] | None = None,
 ) -> pd.DataFrame:
     """Match one trip's GPS points to the road network and return a per-row
     enriched dataframe.
@@ -1111,6 +1129,10 @@ def match_trip_to_network_rows(
     route, as written by route_inference.save_route_metadata), those edges get
     config.route_candidates_per_edge candidate positions each instead of one —
     see generate_edge_candidates.
+
+    `bonus_edges` is the hand-curated subset of route edges that get
+    config.route_edge_bonus subtracted from their emission cost (see
+    generate_edge_candidates); None or empty changes nothing.
     """
     if dist_cache is None:
         dist_cache = NetworkDistanceCache(index.graph_proj)
@@ -1123,7 +1145,7 @@ def match_trip_to_network_rows(
 
     seg_pairs = _match_usable_segments(
         df, index, config, dist_cache, trace_sink=trace_sink, route_edges=route_edges,
-        path_sink=path_sink,
+        path_sink=path_sink, bonus_edges=bonus_edges,
     )
     if trace_sink:
         xs = np.array([r.x for r in trace_sink])
@@ -1291,6 +1313,7 @@ def match_trip_csv_to_network(
     route: Route1D | None = None,
     polygon=None,
     route_edges: set[EdgeKey] | None = None,
+    bonus_edges: set[EdgeKey] | None = None,
 ) -> pd.DataFrame:
     """Load one trip CSV, match it to the road network, and optionally save
     output. Thin I/O wrapper around match_trip_to_network_rows.
@@ -1298,7 +1321,7 @@ def match_trip_csv_to_network(
     trip_df = pd.read_csv(csv_path)
     result = match_trip_to_network_rows(
         trip_df, trip_id, index, config, dist_cache, transformer_inv,
-        route=route, polygon=polygon, route_edges=route_edges,
+        route=route, polygon=polygon, route_edges=route_edges, bonus_edges=bonus_edges,
     )
     if output_csv_path is not None:
         out_path = Path(output_csv_path)

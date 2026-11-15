@@ -35,6 +35,23 @@ MARE_WHOLE_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_whole.kml"
 MARE_AREAS_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_areas.kml"
 CALIBRATION_EQUATIONS_PATH: Path = PROJECT_ROOT / "calibration" / "calibration_equations.csv"
 
+# The Zenodo deposit in two stages: package_for_zenodo.py writes the complete,
+# uncurated package; apply_curation.py reads it plus CURATION_PATH and writes the
+# curated one, which is what gets uploaded. The curation panel reads the package.
+ZENODO_PACKAGE_DIR: Path = PROJECT_ROOT / "output" / "zenodo_package"
+ZENODO_CURATED_DIR: Path = PROJECT_ROOT / "output" / "zenodo_curated"
+
+# Hand-made keep/discard/trim/cut decisions for the Zenodo release, written by the
+# curation panel (scripts/curate_release.py) and applied by apply_curation.py.
+# Committed on purpose: unlike output/, these decisions can't be regenerated.
+CURATION_PATH: Path = PROJECT_ROOT / "curation" / "release_curation.json"
+
+# Hand-picked route edges per track that get MatchConfig.route_edge_bonus in the
+# final matching (scripts/add_edge_bonus.py edits it; netmatch's bonus_edges
+# reads it via edge_bonus.load_bonus_edges). Committed for the same reason as
+# CURATION_PATH: it is human judgement and can't be regenerated.
+EDGE_BONUS_PATH: Path = PROJECT_ROOT / "curation" / "edge_bonus.json"
+
 # Suffixes retired by the a/b/c/d/e rename (including the pre-"_raw" bare
 # convention and the "_b_split"/"_c_walks" names those two stages carried
 # before being renamed to "_b_walks"/"_c_prepared"); used only by

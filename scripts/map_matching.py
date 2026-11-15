@@ -21,6 +21,7 @@ import pyproj
 from gps_route_matcher.analysis import load_route_metadata
 from gps_route_matcher.cleaning import TS_CLEAN_COL, TS_INFERRED_COL, TS_VALID_COL
 from gps_route_matcher.config import MatchConfig
+from gps_route_matcher.edge_bonus import load_bonus_edges
 from gps_route_matcher.io import load_gpx_route, load_kml_polygon
 from gps_route_matcher.netmatch import (
     NetworkDistanceCache,
@@ -83,7 +84,6 @@ def map_match(
     index = build_graph_index(graph)
     dist_cache = NetworkDistanceCache(index.graph_proj)
     transformer_inv = pyproj.Transformer.from_crs(index.crs_metric, "EPSG:4326", always_xy=True)
-    config = MatchConfig.for_final_matching()
 
     target_tracks = folders if folders else TRACKS
     print(f"3/4 Matching CSV files in {target_tracks} …")
@@ -100,6 +100,12 @@ def map_match(
             print(f"    skip {track}: {in_dir} not found")
             continue
         warn_if_stale_sibling(track, in_dir.name)
+
+        # Per-track final settings (config.FINAL_MATCH_OVERRIDES).
+        config = MatchConfig.for_final_matching(track)
+        print(f"    {track}: sigma={config.gps_sigma_m:g}, "
+              f"off_route_penalty={config.off_route_penalty:g}, "
+              f"route_edge_bonus={config.route_edge_bonus:g}")
 
         out_dir = PROJECT_ROOT / "data" / f"{track}{MATCHED_SUFFIX}"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -120,6 +126,12 @@ def map_match(
         if route_edges is None:
             print(f"    {track}: no route metadata, matching without route densification")
 
+        # Hand-curated route edges that get config.route_edge_bonus (see
+        # edge_bonus.py); empty for a track with none, which changes nothing.
+        bonus_edges = load_bonus_edges(track)
+        if bonus_edges:
+            print(f"    {track}: {len(bonus_edges)} curated bonus edge(s)")
+
         csv_paths = _iter_csv_files(in_dir)
         if max_files is not None:
             csv_paths = csv_paths[:max_files]
@@ -138,6 +150,7 @@ def map_match(
             result = match_trip_to_network_rows(
                 trip_df, csv_path.stem, index, config, dist_cache, transformer_inv,
                 route=route, polygon=polygon, route_edges=route_edges,
+                bonus_edges=bonus_edges,
             )
             result.drop(columns=_FINAL_CSV_DROP_COLUMNS).to_csv(out_path, index=False)
 

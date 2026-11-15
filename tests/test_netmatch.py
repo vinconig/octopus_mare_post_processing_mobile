@@ -10,7 +10,12 @@ import pytest
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString, Point
 
-from gps_route_matcher.config import MatchConfig
+from gps_route_matcher.config import (
+    FINAL_MATCH_GPS_SIGMA_M,
+    FINAL_MATCH_OFF_ROUTE_PENALTY,
+    FINAL_MATCH_ROUTE_EDGE_BONUS,
+    MatchConfig,
+)
 from gps_route_matcher.netmatch import (
     CandidateTraceRow,
     EdgeCandidate,
@@ -792,6 +797,95 @@ def test_off_route_penalty_is_inert_without_route_edges():
     plain = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config())
     pen = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config(off_route_penalty=8.0))
     assert [c.emission_cost for c in pen] == pytest.approx([c.emission_cost for c in plain])
+
+
+# ── curated route-edge bonus ────────────────────────────────────────────────
+
+
+def _parallel_streets_index():
+    """Route street along y=0 and a neighbouring street along y=10, both 200 m long."""
+    return _geometry_index({
+        (1, 2, 0): LineString([(-100.0, 0.0), (100.0, 0.0)]),    # the inferred route
+        (3, 4, 0): LineString([(-100.0, 10.0), (100.0, 10.0)]),  # neighbour
+    })
+
+
+def _emission_winner(index, y, config, **kw):
+    """Edge of the cheapest candidate for a fix at (0, y) — emission alone, no transitions."""
+    cands = generate_edge_candidates(index, 0.0, y, 0, config, route_edges={(1, 2, 0)}, **kw)
+    return min(cands, key=lambda c: c.emission_cost).edge
+
+
+def test_bonus_edges_get_a_negative_route_prior():
+    index = _t_junction_index()
+    config = _candidate_config(off_route_penalty=8.0, route_edge_bonus=3.0)
+    base = generate_edge_candidates(index, -50.0, 2.0, 0, config, route_edges={(1, 2, 0)})
+    bonus = generate_edge_candidates(index, -50.0, 2.0, 0, config, route_edges={(1, 2, 0)},
+                                     bonus_edges={(1, 2, 0)})
+    by_edge = lambda cs: {c.edge: c for c in cs}
+    assert by_edge(bonus)[(1, 2, 0)].off_route_cost == -3.0
+    assert by_edge(bonus)[(1, 2, 0)].emission_cost == pytest.approx(
+        by_edge(base)[(1, 2, 0)].emission_cost - 3.0)
+    # an off-route edge keeps its penalty; the bonus is for the curated edge only
+    assert by_edge(bonus)[(3, 4, 0)].off_route_cost == 8.0
+    assert by_edge(bonus)[(3, 4, 0)].emission_cost == pytest.approx(
+        by_edge(base)[(3, 4, 0)].emission_cost)
+
+
+def test_bonus_edges_none_or_empty_changes_nothing():
+    index = _t_junction_index()
+    config = _candidate_config(off_route_penalty=8.0, route_edge_bonus=3.0)
+    ref = generate_edge_candidates(index, -50.0, 2.0, 0, config, route_edges={(1, 2, 0)})
+    for bonus_edges in (None, set()):
+        got = generate_edge_candidates(index, -50.0, 2.0, 0, config, route_edges={(1, 2, 0)},
+                                       bonus_edges=bonus_edges)
+        assert [(c.edge, c.offset_m, c.emission_cost) for c in got] == \
+               [(c.edge, c.offset_m, c.emission_cost) for c in ref]
+
+
+def test_bonus_with_zero_magnitude_is_inert():
+    index = _t_junction_index()
+    ref = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config(),
+                                   route_edges={(1, 2, 0)})
+    got = generate_edge_candidates(index, -50.0, 2.0, 0, _candidate_config(),
+                                   route_edges={(1, 2, 0)}, bonus_edges={(1, 2, 0)})
+    assert [c.emission_cost for c in got] == pytest.approx([c.emission_cost for c in ref])
+
+
+def test_bonus_flips_a_fix_between_route_and_neighbour_to_the_route():
+    """A fix 6.5 m from the route and 3.5 m from the neighbour goes to the
+    neighbour on geometry (sigma=1: 21.1 vs 6.1 + penalty 10); a bonus of 10 on
+    the route edge tips it back."""
+    index = _parallel_streets_index()
+    config = _candidate_config(gps_sigma_m=1.0, off_route_penalty=10.0, route_edge_bonus=10.0)
+    assert _emission_winner(index, 6.5, config) == (3, 4, 0)
+    assert _emission_winner(index, 6.5, config, bonus_edges={(1, 2, 0)}) == (1, 2, 0)
+
+
+def test_bonus_does_not_pull_a_fix_that_is_clearly_on_the_neighbour():
+    """Invariant guard: a fix 0.5 m from the neighbour and 9.5 m from the route
+    must still match off-route with the bonus on - the bonus is a slight edge
+    for ambiguous fixes, not a way to drive the off-route share to zero."""
+    index = _parallel_streets_index()
+    config = _candidate_config(gps_sigma_m=1.0, off_route_penalty=10.0, route_edge_bonus=10.0)
+    assert _emission_winner(index, 9.5, config, bonus_edges={(1, 2, 0)}) == (3, 4, 0)
+
+
+def test_final_matching_config_sets_a_route_edge_bonus():
+    assert MatchConfig.for_final_matching().route_edge_bonus > 0
+    assert MatchConfig().route_edge_bonus == 0.0   # route inference: no bonus
+
+
+def test_final_matching_config_applies_per_track_overrides():
+    om1 = MatchConfig.for_final_matching("OM_1")
+    assert (om1.gps_sigma_m, om1.off_route_penalty, om1.route_edge_bonus) == (5.0, 10.0, 5000.0)
+    # Tracks without an entry (and no track at all) get the global defaults.
+    for other in (MatchConfig.for_final_matching("OM_2"), MatchConfig.for_final_matching()):
+        assert other.gps_sigma_m == FINAL_MATCH_GPS_SIGMA_M
+        assert other.off_route_penalty == FINAL_MATCH_OFF_ROUTE_PENALTY
+        assert other.route_edge_bonus == FINAL_MATCH_ROUTE_EDGE_BONUS
+    # Explicit overrides (the sweep/tune scripts) win over the track entry.
+    assert MatchConfig.for_final_matching("OM_1", gps_sigma_m=0.25).gps_sigma_m == 0.25
 
 
 def test_final_matching_config_shares_sigma_and_adds_penalty():
