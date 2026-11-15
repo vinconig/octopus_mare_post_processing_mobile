@@ -50,9 +50,9 @@ MATCHED_COLUMNS: dict[str, dict[str, Any]] = {
     "timestamp": {"transform": to_local_timestamp},
     "matched_lon": {"rename": "longitude"},
     "matched_lat": {"rename": "latitude"},
-    "Temperature": {"rename": "temperature"},
-    "Humidity": {"rename": "humidity"},
-    "PM2.5_cal": {"rename": "pm2.5"},
+    "Temperature": {"rename": "temperature_raw"},
+    "Humidity": {"rename": "humidity_raw"},
+    "PM2.5": {"rename": "pm2.5_raw"},
     "match_status": {},
     "matched_edge_u": {"transform": to_nullable_int},
     "matched_edge_v": {"transform": to_nullable_int},
@@ -88,13 +88,14 @@ def _edge_sensor_stats(source: str, shipped: str) -> dict[str, dict[str, Any]]:
     return {f"{source}{suffix}": {"rename": f"{shipped}{suffix}"} for suffix in ("_avg", "_max")}
 
 
-# Mirrors the matched/ sensor selection: temperature, humidity, and
-# calibrated PM2.5 only (shipped as pm2.5, like matched/'s pm2.5 column).
+# Mirrors the matched/ sensor selection: raw (uncalibrated) temperature,
+# humidity and PM2.5 only, each shipped with a `_raw` stem like matched/'s
+# `*_raw` columns (e.g. temperature_raw_avg).
 EDGE_ANALYSIS_COLUMNS: dict[str, dict[str, Any]] = {
     **_EDGE_CORE_COLUMNS,
-    **_edge_sensor_stats("temperature", "temperature"),
-    **_edge_sensor_stats("humidity", "humidity"),
-    **_edge_sensor_stats("pm2.5_cal", "pm2.5"),
+    **_edge_sensor_stats("temperature", "temperature_raw"),
+    **_edge_sensor_stats("humidity", "humidity_raw"),
+    **_edge_sensor_stats("pm2.5", "pm2.5_raw"),
 }
 
 
@@ -113,3 +114,38 @@ def apply_column_config(df: pd.DataFrame, column_config: dict[str, dict[str, Any
             values = entry["transform"](values)
         out[entry.get("rename", source)] = values
     return out
+
+
+# Where the walk files sit inside a package (package_for_zenodo.py writes them,
+# apply_curation.py and the curation panel read them), relative to its root.
+MOBILE_SUBDIR = "data/mobile"
+EDGE_SUBDIR = "data/mobile_agg_by_edge"
+ROUTE_METADATA_SUBDIR = "metadata/route_metadata"
+
+# A walk whose shipped data/mobile rows touch fewer than this many distinct
+# road-network edges carries too little network coverage to be a usable trip
+# (e.g. the sensor was switched on/off before any real walking happened) and is
+# left out of the package entirely. Applied by package_for_zenodo.py to every
+# walk and again by apply_curation.py to a walk whose rows a curation edit removed.
+MIN_MATCHED_EDGES = 5
+
+
+def n_distinct_matched_edges(df: pd.DataFrame) -> int:
+    """Count of distinct (matched_edge_u, matched_edge_v) road-network edges
+    touched by df's rows (NaN edges, e.g. unresolved_large_gap rows, don't
+    count — they were never placed on the network). Operates on the
+    exported (renamed) columns."""
+    edges = df[["matched_edge_u", "matched_edge_v"]].dropna()
+    return len(edges.drop_duplicates())
+
+
+def real_duration_min(df: pd.DataFrame) -> int:
+    """Floor(minutes) span of df's own timestamp column — the actual
+    time range covered by the rows being shipped, not the original walk's
+    pre-cleaning duration. Mirrors make_trip_data.py's
+    int((ts.iat[-1] - ts.iat[0]).total_seconds() // 60), just computed on
+    the exported data instead of the raw recording."""
+    ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
+    if ts.empty:
+        return 0
+    return int((ts.max() - ts.min()).total_seconds() // 60)

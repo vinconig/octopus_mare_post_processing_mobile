@@ -188,16 +188,21 @@ def save_edge_analysis(df: pd.DataFrame, out_path: str | Path) -> None:
     df.to_csv(out_path, index=False)
 
 
-def run_edge_analysis(
-    matched_csv_path: str | Path, route_metadata: dict
-) -> pd.DataFrame:
-    """Full per-file pipeline: load -> restrict/assign to route edges ->
-    aggregate -> reindex to the full route -> assemble the output dataframe."""
-    trip_df = load_matched_route(matched_csv_path)
+def edge_analysis_from_df(trip_df: pd.DataFrame, route_metadata: dict) -> pd.DataFrame:
+    """run_edge_analysis on an already-loaded (possibly row-subset) matched
+    trip: restrict/assign to route edges -> aggregate -> reindex to the full
+    route -> assemble the output dataframe."""
     assigned = assign_points_to_edges(trip_df, route_metadata)
     aggregated = aggregate_by_edge(assigned)
     reindexed = reindex_to_full_route(aggregated, route_metadata)
     return assemble_output(reindexed)
+
+
+def run_edge_analysis(
+    matched_csv_path: str | Path, route_metadata: dict
+) -> pd.DataFrame:
+    """Full per-file pipeline: load the matched CSV, then edge_analysis_from_df."""
+    return edge_analysis_from_df(load_matched_route(matched_csv_path), route_metadata)
 
 
 def load_route_recordings(track: str) -> pd.DataFrame:

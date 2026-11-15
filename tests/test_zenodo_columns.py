@@ -87,21 +87,21 @@ def test_matched_columns_are_exactly_the_published_set_in_order():
     shipped = [entry.get("rename", source) for source, entry in MATCHED_COLUMNS.items()]
 
     assert shipped == [
-        "timestamp", "longitude", "latitude", "temperature", "humidity", "pm2.5",
+        "timestamp", "longitude", "latitude", "temperature_raw", "humidity_raw", "pm2.5_raw",
         "match_status", "matched_edge_u", "matched_edge_v", "matched_edge_key",
         "longitude_raw", "latitude_raw",
     ]
-    assert "PM2.5_cal" in MATCHED_COLUMNS and "PM2.5" not in MATCHED_COLUMNS  # calibrated only
+    assert "PM2.5" in MATCHED_COLUMNS and "PM2.5_cal" not in MATCHED_COLUMNS  # raw only
     assert "out_of_time_bounds" not in MATCHED_COLUMNS
 
 
-def test_edge_analysis_ships_only_calibrated_pm25_stats():
+def test_edge_analysis_ships_only_raw_sensor_stats():
     shipped = {entry.get("rename", source) for source, entry in EDGE_ANALYSIS_COLUMNS.items()}
 
-    assert {"pm2.5_avg", "pm2.5_max", "temperature_avg", "humidity_max"} <= shipped
-    assert not {"pm1.0_avg", "pm4.0_max", "pm10.0_avg"} & shipped
-    assert "pm2.5_avg" in {e.get("rename") for e in EDGE_ANALYSIS_COLUMNS.values()}
-    assert "pm2.5_avg" not in EDGE_ANALYSIS_COLUMNS  # the raw source column isn't whitelisted
+    assert {"pm2.5_raw_avg", "pm2.5_raw_max", "temperature_raw_avg", "humidity_raw_max"} <= shipped
+    assert not {"pm1.0_avg", "pm4.0_max", "pm10.0_avg", "pm2.5_avg", "pm2.5_cal_avg"} & shipped
+    assert "pm2.5_avg" in EDGE_ANALYSIS_COLUMNS  # the raw source column (renamed on the way out)
+    assert "pm2.5_cal_avg" not in EDGE_ANALYSIS_COLUMNS  # the calibrated one is never shipped
 
 
 def test_zenodo_readme_mentions_every_shipped_column():

@@ -10,7 +10,8 @@ never usable data for an external consumer; the flag is not shipped as a
 column because no shipped row can carry it), apply the column whitelist in
 gps_route_matcher.zenodo_columns (a short, lowercase set of columns, with
 `timestamp` converted to local time UTC-3 and rounded to whole seconds, and
-`pm2.5` being the calibrated value only), and write the result to
+`temperature_raw`/`humidity_raw`/`pm2.5_raw` being the raw, uncalibrated
+sensor values — no calibrated value ships), and write the result to
 output/zenodo_package/data/mobile/. A walk whose shipped rows touch fewer than
 MIN_MATCHED_EDGES distinct road-network edges is excluded from the package
 entirely (too little network coverage to be a usable trip; see
@@ -22,14 +23,19 @@ actually in the exported file, not the pre-cleaning recording length. The
 paired data/mobile_agg_by_edge/ CSV for the same walk (if present) is exported under
 that identical, recomputed filename, so the two stay joinable by name; its
 own duration is never independently recomputed. It gets the same
-whitelist treatment (temperature, humidity and calibrated pm2.5 stats only,
-local-time timestamps). Also copies the companion files needed to make the
-export reproducible/self-contained, under metadata/: each track's
-routes/route_metadata/<track>_inferred_route.json (the edge_order/u,v,key
-anchor) -> metadata/route_metadata/, roadnetwork/mare_openstreetmap_road_graph_2026-11-04.graphml (the OSM
-snapshot those ids refer to) -> metadata/roadnetwork/, and
-calibration/calibration_equations.csv + calibration/cross_validation_metrics.csv
-(needed to interpret pm2.5) -> metadata/calibration_metadata/.
+whitelist treatment (raw temperature, humidity and pm2.5 stats only, each
+`*_raw_avg`/`*_raw_max`, local-time timestamps). Also copies the companion
+files needed to make the export reproducible/self-contained, under metadata/:
+each track's routes/route_metadata/<track>_inferred_route.json (the
+edge_order/u,v,key anchor) -> metadata/route_metadata/, and
+roadnetwork/mare_openstreetmap_road_graph_2026-11-04.graphml (the OSM
+snapshot those ids refer to) -> metadata/roadnetwork/. No calibration files
+ship, since no calibrated value does.
+
+The package is never curated: it is the complete, deterministic output of the
+automatic gates. The human keep/discard/trim/cut pass is a separate step that
+reads this package (scripts/curate_release.py, a panel over it) and writes a
+second one (scripts/apply_curation.py -> output/zenodo_curated/).
 
 Does not write a README, data dictionary, provenance file or LICENSE — the
 dataset description (including the column reference and the OSM snapshot
@@ -47,18 +53,24 @@ from pathlib import Path
 import pandas as pd
 
 from gps_route_matcher.paths import (
-    CALIBRATION_EQUATIONS_PATH,
     EDGE_ANALYSIS_SUFFIX,
     MATCHED_SUFFIX,
     PROJECT_ROOT,
     TRACKS,
+    ZENODO_PACKAGE_DIR,
 )
 from gps_route_matcher.recording_naming import _parse_recording_filename, _TRIP_FILENAME_RE
 from gps_route_matcher.roadnet import ROAD_GRAPH_PATH
 from gps_route_matcher.zenodo_columns import (
     EDGE_ANALYSIS_COLUMNS,
+    EDGE_SUBDIR,
     MATCHED_COLUMNS,
+    MIN_MATCHED_EDGES,
+    MOBILE_SUBDIR,
+    ROUTE_METADATA_SUBDIR,
     apply_column_config,
+    n_distinct_matched_edges,
+    real_duration_min,
 )
 from map_matching import _iter_csv_files
 
@@ -71,39 +83,16 @@ _EXPORT_DATE_MAX = "20260430"
 # Layout of the deposit, relative to the package root: data/ holds the
 # mobile (walked) CSV families plus a folder for the fixed (stationary) sensor
 # data, metadata/ everything needed to interpret them.
-MATCHED_SUBDIR = "data/mobile"
-EDGE_ANALYSIS_SUBDIR = "data/mobile_agg_by_edge"
+MATCHED_SUBDIR = MOBILE_SUBDIR  # shared with apply_curation / the panel: see zenodo_columns
+EDGE_ANALYSIS_SUBDIR = EDGE_SUBDIR
 FIXED_SUBDIR = "data/fixed"  # stationary-sensor data; not exported by this script yet, folder is created empty
-ROUTE_METADATA_SUBDIR = "metadata/route_metadata"
 ROADNETWORK_SUBDIR = "metadata/roadnetwork"
-CALIBRATION_SUBDIR = "metadata/calibration_metadata"
 
-# A walk whose shipped data/mobile rows touch fewer than this many distinct
-# road-network edges carries too little network coverage to be a usable
-# trip (e.g. the sensor was switched on/off before any real walking
-# happened) and is left out of the package entirely.
-MIN_MATCHED_EDGES = 5
-
-
-def _n_distinct_matched_edges(df: pd.DataFrame) -> int:
-    """Count of distinct (matched_edge_u, matched_edge_v) road-network edges
-    touched by df's rows (NaN edges, e.g. unresolved_large_gap rows, don't
-    count — they were never placed on the network). Operates on the
-    exported (renamed) columns."""
-    edges = df[["matched_edge_u", "matched_edge_v"]].dropna()
-    return len(edges.drop_duplicates())
-
-
-def _real_duration_min(df: pd.DataFrame) -> int:
-    """Floor(minutes) span of df's own timestamp column — the actual
-    time range covered by the rows being shipped, not the original walk's
-    pre-cleaning duration. Mirrors make_trip_data.py's
-    int((ts.iat[-1] - ts.iat[0]).total_seconds() // 60), just computed on
-    the exported data instead of the raw recording."""
-    ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
-    if ts.empty:
-        return 0
-    return int((ts.max() - ts.min()).total_seconds() // 60)
+# MIN_MATCHED_EDGES (the minimum network coverage a walk needs to ship) and the
+# two helpers below live in zenodo_columns so apply_curation.py applies the very
+# same gate to a walk whose rows a curation edit removed.
+_n_distinct_matched_edges = n_distinct_matched_edges
+_real_duration_min = real_duration_min
 
 
 def _in_export_window(csv_path: Path) -> bool:
@@ -138,15 +127,14 @@ def package_for_zenodo(
     until a full run (folders=None) cleans them up.
     """
     target_tracks = folders if folders else TRACKS
-    out_dir = out_dir or (PROJECT_ROOT / "output" / "zenodo_package")
+    out_dir = out_dir or ZENODO_PACKAGE_DIR
 
     matched_out = out_dir / MATCHED_SUBDIR
     edge_analysis_out = out_dir / EDGE_ANALYSIS_SUBDIR
     route_metadata_out = out_dir / ROUTE_METADATA_SUBDIR
     roadnetwork_out = out_dir / ROADNETWORK_SUBDIR
-    calibration_out = out_dir / CALIBRATION_SUBDIR
     fixed_out = out_dir / FIXED_SUBDIR
-    for d in (matched_out, edge_analysis_out, fixed_out, route_metadata_out, roadnetwork_out, calibration_out):
+    for d in (matched_out, edge_analysis_out, fixed_out, route_metadata_out, roadnetwork_out):
         d.mkdir(parents=True, exist_ok=True)
 
     if overwrite:
@@ -187,10 +175,12 @@ def package_for_zenodo(
                 continue
 
             m = _TRIP_FILENAME_RE.match(csv_path.stem)
+
             raw_df = pd.read_csv(csv_path)
             excluded_mask = raw_df["out_of_time_bounds"].astype(bool)
             n_matched_rows_excluded += int(excluded_mask.sum())
-            df = apply_column_config(raw_df[~excluded_mask], MATCHED_COLUMNS)
+            usable_raw = raw_df[~excluded_mask]
+            df = apply_column_config(usable_raw, MATCHED_COLUMNS)
 
             if _n_distinct_matched_edges(df) < MIN_MATCHED_EDGES:
                 n_files_too_few_edges += 1
@@ -216,11 +206,8 @@ def package_for_zenodo(
             ea_df.to_csv(ea_out_path, index=False)
             n_edge_analysis_files += 1
 
-    print("2/3 Copying companion files (OSM graph snapshot, calibration) …")
+    print("2/3 Copying companion files (OSM graph snapshot) …")
     shutil.copy2(ROAD_GRAPH_PATH, roadnetwork_out / ROAD_GRAPH_PATH.name)
-    shutil.copy2(CALIBRATION_EQUATIONS_PATH, calibration_out / CALIBRATION_EQUATIONS_PATH.name)
-    cross_val_path = CALIBRATION_EQUATIONS_PATH.parent / "cross_validation_metrics.csv"
-    shutil.copy2(cross_val_path, calibration_out / cross_val_path.name)
 
     print("3/3 Summary")
     print(f"    matched files: {n_matched_files}, edge_analysis files: {n_edge_analysis_files}, "
