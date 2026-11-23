@@ -1,4 +1,4 @@
-# DenoiseGPS
+# octopus_mare_post_processing_mobile
 
 Processing code for a dataset of a mobile environmental sensing campaign in Maré, a complex of 15 favelas in Rio de Janeiro, Brazil. Four sensing platforms (Octopus, developed by MIT) were walked along 4 predefined routes. It documents how the released files (timestamp and gps) were derived from the raw sensor recordings: noisy lat/lon + timestamp CSVs are cleaned, snapped onto the real road network (OpenStreetMap via OSMnx) with an HMM/Viterbi map matcher, aggregated per road edge, and packaged into the deposit folder `output/zenodo_curated/`.
 
