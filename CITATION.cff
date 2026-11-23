@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "octopus_mare_post_processing_mobile"
+abstract: >-
+  Processing code for the mobile part of an environmental sensing campaign in
+  Maré, Rio de Janeiro. It turns raw sensor recordings into individual walk
+  files, cleans their timestamps and map-matches their GPS positions onto the
+  OpenStreetMap road network. It documents how the released dataset
+  (https://doi.org/10.5281/zenodo.23105404) was derived from the raw recordings.
+authors:
+  - family-names: "Jansen"
+    given-names: "Vincent"
+    affiliation: "Massachusetts Institute of Technology; Technical University of Munich"
+repository-code: "https://github.com/vinconig/octopus_mare_post_processing_mobile"
+license: MIT

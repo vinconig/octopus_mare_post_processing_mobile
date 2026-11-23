@@ -1,6 +1,10 @@
 # octopus_mare_post_processing_mobile
 
-Processing code for a dataset of a mobile environmental sensing campaign in Maré, a complex of 15 favelas in Rio de Janeiro, Brazil. Four sensing platforms (Octopus, developed by MIT) were walked along 4 predefined routes. It documents how the released files (timestamp and gps) were derived from the raw sensor recordings: noisy lat/lon + timestamp CSVs are cleaned, snapped onto the real road network (OpenStreetMap via OSMnx) with an HMM/Viterbi map matcher, aggregated per road edge, and packaged into the deposit folder `output/zenodo_curated/`.
+Processing code for the mobile part of an environmental sensing campaign in Maré, a complex of 15 favelas in Rio de Janeiro, Brazil. Four sensing platforms (Octopus, developed by MIT) were walked along 4 predefined routes. This repository turns their raw recordings into individual walk files, cleans the timestamps and map-matches the GPS positions onto the real road network (OpenStreetMap via OSMnx) with an HMM/Viterbi map matcher. The matched walks are then aggregated per road edge and packaged into the deposit folder `output/zenodo_curated/`.
+
+The calibration of the environmental readings and the fixed data stream of the campaign are not part of this repository; they are processed elsewhere.
+
+The released dataset: [doi.org/10.5281/zenodo.23105404](https://doi.org/10.5281/zenodo.23105404).
 
 **The raw recordings are not available.** They contain locations that identify private addresses, so they cannot be shared, and the pipeline cannot be re-run from the start without them. What is public is the released dataset (the map-matched walks and per-edge aggregates) and this code. The code can be read and audited, its tests run without any data, and everything that was decided by hand (route endpoints, matching settings, release curation) is committed alongside it.
 
@@ -82,3 +86,7 @@ The code was written for this specific campaign, so reusing it means editing a h
 | Keep/discard/trim/cut decisions | `curation/release_curation.json`. These are specific to the released walks. |
 
 The matching itself (`netmatch.py`, `route_inference.py`) does not depend on the sensors, so it is the part most likely to carry over. Expect to re-tune the matching parameters for your own GPS quality; the per-track overrides in `config.py` show how much they differed between the four sensors here.
+
+## License and citation
+
+The code is released under the [MIT License](LICENSE). To cite it, use the metadata in [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository" button reads it), and cite the dataset via its DOI above.

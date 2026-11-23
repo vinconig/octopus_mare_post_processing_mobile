@@ -5,6 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gps-route-matcher"
 version = "0.1.0"
+authors = [{ name = "Vincent Jansen" }]
+license = { text = "MIT" }
 requires-python = ">=3.11"
 # Pinned exactly: the released files are reproduced byte for byte, and that depends on
 # the numerical behaviour of these versions (Python 3.11).
