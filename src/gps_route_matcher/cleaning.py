@@ -322,7 +322,7 @@ def categorize_oob(df: pd.DataFrame, polygon) -> pd.DataFrame:
     Parameters
     ----------
     polygon :
-        A shapely geometry (e.g. the Bairro.kml boundary, loaded once via
+        A shapely geometry (e.g. the mare_outline.kml boundary, loaded once via
         io.load_kml_polygon(...).union_all() and reused across trips).
 
     Adds column:

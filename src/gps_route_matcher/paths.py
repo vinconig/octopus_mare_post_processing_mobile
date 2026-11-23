@@ -21,7 +21,7 @@ MATCHED_SUFFIX = "_d_matched"
 EDGE_ANALYSIS_SUFFIX = "_e_edge_analysis"
 _ALL_SUFFIXES = [RAW_SUFFIX, WALKS_SUFFIX, PREPARED_SUFFIX, MATCHED_SUFFIX, EDGE_ANALYSIS_SUFFIX]
 
-BAIRRO_KML_PATH: Path = PROJECT_ROOT / "borders" / "Bairro.kml"
+MARE_OUTLINE_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_outline.kml"
 
 # The Zenodo deposit in two stages: package_for_zenodo.py writes the complete,
 # uncurated package; apply_curation.py reads it plus CURATION_PATH and writes the

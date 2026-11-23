@@ -15,7 +15,7 @@ import numpy as np
 from gps_route_matcher.config import MatchConfig, RouteInferenceConfig
 from gps_route_matcher.io import _load_all_tracks, load_kml_polygon, write_gpx_route
 from gps_route_matcher.netmatch import build_graph_index, match_all_trips
-from gps_route_matcher.paths import BAIRRO_KML_PATH, PREPARED_SUFFIX, PROJECT_ROOT, RAW_SUFFIX, TRACKS
+from gps_route_matcher.paths import MARE_OUTLINE_KML_PATH, PREPARED_SUFFIX, PROJECT_ROOT, RAW_SUFFIX, TRACKS
 from gps_route_matcher.roadnet import load_road_graph
 from gps_route_matcher.route_inference import (
     build_edge_counts,
@@ -106,7 +106,7 @@ def infer_route(
     )
 
     print("1/5 Loading bairro polygon and road graph …")
-    polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
+    polygon = load_kml_polygon(str(MARE_OUTLINE_KML_PATH)).union_all()
     graph = load_road_graph()
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 

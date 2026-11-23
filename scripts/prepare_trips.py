@@ -37,7 +37,7 @@ from gps_route_matcher.cleaning import categorize_oob, clean_gps_dataframe
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.io import _iter_csv_files, load_kml_polygon
 from gps_route_matcher.paths import (
-    BAIRRO_KML_PATH,
+    MARE_OUTLINE_KML_PATH,
     PREPARED_SUFFIX,
     PROJECT_ROOT,
     TRACKS,
@@ -58,7 +58,7 @@ def prepare_trips(
     config = config or MatchConfig()
 
     print("1/3 Loading bairro polygon …")
-    polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
+    polygon = load_kml_polygon(str(MARE_OUTLINE_KML_PATH)).union_all()
 
     target_tracks = folders or TRACKS
     print(f"2/3 Cleaning trips in {target_tracks} …")

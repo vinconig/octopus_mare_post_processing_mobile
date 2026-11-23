@@ -868,7 +868,7 @@ def match_trip_to_network_rows(
     points beyond config.oob_buffer_m from that line get out_of_bounds = True
     and the walk's own time window is derived from it (cleaning.inspect_gps_oob
     / inspect_gps_ootb) — gps_valid itself is left untouched. `polygon` (the
-    Bairro.kml boundary) adds gps_inside_polygon. Passing either as None just
+    mare_outline.kml boundary) adds gps_inside_polygon. Passing either as None just
     skips the checks that need it; see cleaning.prepare_for_matching, which
     owns the ordering.
 

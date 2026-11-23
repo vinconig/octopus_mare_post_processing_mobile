@@ -28,7 +28,7 @@ from gps_route_matcher.netmatch import (
     match_trip_to_network_rows,
 )
 from gps_route_matcher.paths import (
-    BAIRRO_KML_PATH,
+    MARE_OUTLINE_KML_PATH,
     MATCHED_SUFFIX,
     PREPARED_SUFFIX,
     PROJECT_ROOT,
@@ -65,7 +65,7 @@ def map_match(
     so a second run only fills in files that are missing or new.
     """
     print("1/4 Loading bairro polygon and road graph …")
-    polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
+    polygon = load_kml_polygon(str(MARE_OUTLINE_KML_PATH)).union_all()
     graph = load_road_graph()
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
