@@ -105,7 +105,7 @@ def apply_curation(
     out_dir: Path | str = ZENODO_CURATED_DIR,
     curation_path: Path | str | None = CURATION_PATH,
 ) -> CurationSummary:
-    """Apply the curation panel's decisions to a Zenodo package, writing a second package.
+    """Apply the hand-made curation decisions to a Zenodo package, writing a second package.
 
     Reads `package_dir` (package_for_zenodo.py's output, which is never modified)
     and writes the curated deposit to `out_dir`:

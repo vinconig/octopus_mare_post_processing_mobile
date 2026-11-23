@@ -114,7 +114,7 @@ def apply_column_config(df: pd.DataFrame, column_config: dict[str, dict[str, Any
 
 
 # Where the walk files sit inside a package (package_for_zenodo.py writes them,
-# apply_curation.py and the curation panel read them), relative to its root.
+# apply_curation.py reads them), relative to its root.
 MOBILE_SUBDIR = "data/mobile"
 EDGE_SUBDIR = "data/mobile_agg_by_edge"
 ROUTE_METADATA_SUBDIR = "metadata/route_metadata"
