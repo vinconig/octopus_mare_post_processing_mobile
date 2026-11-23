@@ -13,7 +13,6 @@ stray non-standard leftovers, not raw CSVs, and are skipped entirely.
 
 import argparse
 from collections import Counter
-from pathlib import Path
 
 import pandas as pd
 import pyproj
@@ -22,7 +21,7 @@ from gps_route_matcher.analysis import load_route_metadata
 from gps_route_matcher.cleaning import TS_CLEAN_COL, TS_INFERRED_COL, TS_VALID_COL
 from gps_route_matcher.config import MatchConfig
 from gps_route_matcher.edge_bonus import load_bonus_edges
-from gps_route_matcher.io import load_gpx_route, load_kml_polygon
+from gps_route_matcher.io import _iter_csv_files, load_gpx_route, load_kml_polygon
 from gps_route_matcher.netmatch import (
     NetworkDistanceCache,
     build_graph_index,
@@ -34,15 +33,14 @@ from gps_route_matcher.paths import (
     PREPARED_SUFFIX,
     PROJECT_ROOT,
     TRACKS,
-    warn_if_stale_sibling,
 )
-from gps_route_matcher.roadnet import get_road_graph
+from gps_route_matcher.roadnet import load_road_graph
 from gps_route_matcher.route import build_route_1d
 
 # Columns that are necessary earlier in the pipeline (cross-file dedup /
 # session-splitting for the ts_* trio; the segment_id derivation for dt_s)
 # but superseded or unread by the time a trip reaches the matched CSV — see
-# .claude/matching_methodology.md. Dropped only here, at the final write:
+# docs/matching_methodology.md. Dropped only here, at the final write:
 # map_matching.py re-reads c_prepared from a separate process and re-derives
 # timestamp/timestamp_valid/timestamp_inferred from ts_clean/ts_valid/
 # ts_inferred if present, so those three must still be on disk in c_prepared.
@@ -51,18 +49,9 @@ from gps_route_matcher.route import build_route_1d
 _FINAL_CSV_DROP_COLUMNS = [TS_CLEAN_COL, TS_VALID_COL, TS_INFERRED_COL, "dt_s"]
 
 
-def _iter_csv_files(folder_path: Path) -> list[Path]:
-    """Top-level CSV files only (mirrors visualization._load_all_tracks);
-    nested date/time subfolders are never visited."""
-    return sorted(
-        p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() == ".csv"
-    )
-
-
 def map_match(
     folders: list[str] | None = None,
     max_files: int | None = None,
-    force_refresh: bool = False,
     overwrite: bool = True,
 ) -> None:
     """Match every CSV in the given (or all) data/<track>_c_prepared folders onto
@@ -77,7 +66,7 @@ def map_match(
     """
     print("1/4 Loading bairro polygon and road graph …")
     polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
-    graph = get_road_graph(polygon, network_type="walk", force_refresh=force_refresh)
+    graph = load_road_graph()
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
     print("2/4 Building graph index …")
@@ -99,7 +88,6 @@ def map_match(
         if not in_dir.exists():
             print(f"    skip {track}: {in_dir} not found")
             continue
-        warn_if_stale_sibling(track, in_dir.name)
 
         # Per-track final settings (config.FINAL_MATCH_OVERRIDES).
         config = MatchConfig.for_final_matching(track)
@@ -178,16 +166,12 @@ def main() -> None:
                              "OM_1..OM_4.")
     parser.add_argument("--max-files", type=int, default=None,
                         help="Only match the first N CSV files per track (for quick tests)")
-    parser.add_argument("--force-refresh", action="store_true",
-                        help="Bypass both the roadnetwork GraphML cache and osmnx's own "
-                             "Overpass response cache, forcing a fresh OSM download")
     parser.add_argument("--no-overwrite", dest="overwrite", action="store_false",
                         help="Skip CSVs whose matched output already exists, instead of "
                              "overwriting them")
     args = parser.parse_args()
 
-    map_match(folders=args.folders, max_files=args.max_files, force_refresh=args.force_refresh,
-              overwrite=args.overwrite)
+    map_match(folders=args.folders, max_files=args.max_files, overwrite=args.overwrite)
 
 
 if __name__ == "__main__":

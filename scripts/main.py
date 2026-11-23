@@ -1,103 +1,63 @@
-from gps_route_matcher.visualization import generate_interactive_map_all_data_incl_edges, generate_interactive_map_debug, generate_hmm_debug_map
-import argparse
-import os
-import webbrowser
-from gps_route_matcher.paths import PROJECT_ROOT, TRACKS
-import download_gdrive_data
+"""Run the whole pipeline: raw recordings -> output/zenodo_curated/.
+
+Expects the raw per-recording CSVs in data/OM_n_a_raw/ (see README.md). Every
+stage reads the previous stage's folder and writes the next one; the folder
+names and track list live in src/gps_route_matcher/paths.py, and all matching
+parameters in src/gps_route_matcher/config.py.
+"""
+
+import apply_curation
 import infer_route
-import map_matching
-import route_edge_analysis
-import generate_map_info
-import find_dropped_points
-import generate_route_plots
-import generate_route_plots_publication
 import make_trip_data
-import prepare_trips
+import map_matching
 import package_for_zenodo
+import prepare_trips
+import route_edge_analysis
+from gps_route_matcher.paths import TRACKS
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--no-browser", action="store_true",
-                         help="Don't open the generated maps (hmm debug, per-track "
-                              "inferred-route, and final all-data map) in a browser")
-    parser.add_argument("--force-refresh", action="store_true",
-                         help="Redownload the OSM road graph instead of reusing the cached "
-                              "one, once (for the first track) so it's cached for the rest")
-    args = parser.parse_args()
-    no_browser = args.no_browser
-
-    # #initial data download from google drive (only needs to be done once, commented out after first run)
-    # #download_gdrive_data.download_om_folders(PROJECT_ROOT)
-
-    #folder names of all routes/sensors, by bare track name — every stage below
-    #derives its own input/output data/ folder from this via its fixed suffix
-    #(see src/gps_route_matcher/paths.py)
+    # Bare track names: every stage derives its own input/output data/ folder from
+    # them via its fixed suffix.
     folders = TRACKS
 
-    #make trip data from raw CSVs: validates each recording's timestamps first (per raw file,
-    #while its emit order/filename/own spread are still available), then concatenates per sensor
-    #and cuts the result into one CSV per walk
+    # Validates each raw recording's timestamps first (per raw file, while its emit
+    # order/filename/own spread are still available), then concatenates per sensor and
+    # cuts the result into one CSV per walk: data/OM_n_a_raw/ -> data/OM_n_b_walks/.
     make_trip_data.make_trip_data(folders=folders)
 
-    #applies the route-independent GPS cleaning once, data/OM_n_b_walks/ -> data/OM_n_c_prepared/,
-    #so infer_route and map_matching below both read the same flags instead of each deriving them.
-    #Everything that needs the inferred route stays in map_matching — the route is inferred below.
+    # Route-independent GPS cleaning, once: data/OM_n_b_walks/ -> data/OM_n_c_prepared/, so
+    # infer_route and map_matching below both read the same flags. Everything that needs the
+    # inferred route stays in map_matching — the route is inferred below.
     prepare_trips.prepare_trips(folders=folders)
 
-    # Manual route endpoints per track for inferring the route that was taken ("LAT,LON" or (lat, lon)); leave a track out (or use None, None) to keep automatic start/end clustering.
+    # Manual route endpoints per track for inferring the route that was taken
+    # ("LAT,LON" or (lat, lon)); leave a track out (or use None, None) to keep automatic
+    # start/end clustering.
     manual_endpoints = {
         "OM_1": ("-22.839904,-43.252176", "-22.841699, -43.246335"),
         "OM_2": ("-22.855784, -43.239960", "-22.851474,-43.245772"),
         "OM_3": ("-22.858845,-43.239657", "-22.867317,-43.241040"),
         "OM_4": ("-22.871660, -43.236408", "-22.865276,-43.235786"),
     }
-    
-    #infer routes from actual data based on traversal frequency
-    #All tuneable parameters for the map-matching pipeline are in src/gps_route_matcher/config.py
-    for i, track in enumerate(folders):
-       start, end = manual_endpoints.get(track, (None, None))
-       infer_route.infer_route(folders=[track], start=start, end=end, force_refresh=(args.force_refresh and i == 0), no_browser=no_browser) #only refreshes on the first track (if requested); later tracks reuse the now-cached road graph
 
-    #maps all points per recording to the road network and creates new CSVs with the matched data in data/OM_n_d_matched/ folders
+    # Infer each route from the actual data based on traversal frequency
+    # -> routes/Inferred_Route_OM_n.gpx and routes/route_metadata/OM_n_inferred_route.json.
+    for track in folders:
+        start, end = manual_endpoints.get(track, (None, None))
+        infer_route.infer_route(folders=[track], start=start, end=end)
+
+    # Match every trip to the road network -> data/OM_n_d_matched/.
     map_matching.map_match(folders=folders)
 
-     #behind the scenes of map matching, generate a debug map showing the HMM candidate traces and the winning path for a single CSV
-    output_path = generate_hmm_debug_map(os.path.join(PROJECT_ROOT, "data/OM_1_c_prepared/OM_1_20251216_afternoon_9durmin.csv"), os.path.join(PROJECT_ROOT, "output", "interactivemaps", "hmm_debug.html"))
-    print(f"Map saved to: {output_path}")
-    if not no_browser:
-        webbrowser.open(f"file://{output_path}")
-
-    #lists every run of consecutive dropped points (unresolved or matched off the inferred route) with the
-    #route edges of the valid anchors around it -> output/dropped_points/dropped_runs.csv, which the
-    #interactive map's debug GPS mode steps through
-    find_dropped_points.find_dropped_points(folders=folders)
-
-    #edge analysis
+    # Aggregate the matched points per route edge -> data/OM_n_e_edge_analysis/.
     route_edge_analysis.route_edge_analysis(folders=folders)
 
-    #generate per-route plots with generic filters (all time periods, all dates, all coverage levels)
-    generate_route_plots.generate_route_plots(folders=folders, time_of_day="morning", min_coverage_pct=50, start_date="20251115", end_date="20260430")
-
-    #same recordings and same filters, as publication figures (SVG): one bootstrapped mean profile
-    #per route with a 95% CI band, on a fixed y scale so the four routes are comparable
-    generate_route_plots_publication.generate_route_plots_publication(folders=folders, time_of_day="morning", min_coverage_pct=50, start_date="20251115", end_date="20260430")
-
-    #generates data on where the map should pan and zoom to
-    generate_map_info.generate_map_info()
-
-    #main data panel
-    #replaces both generate_interactive_map_all_edge_data and generate_interactive_map_all_data, generates a single map with all data and edge analysis data
-    output_path = generate_interactive_map_all_data_incl_edges(
-    os.path.join(PROJECT_ROOT, "output", "interactivemaps", "map_interactive_all_data_incl_edge_data.html"), folders=folders)
-    if not no_browser:
-        webbrowser.open(f"file://{output_path}")
-
-    #same map plus the Debug GPS overlay (steps through output/dropped_points/dropped_runs.csv), kept as its own file
-    output_path = generate_interactive_map_debug(
-    os.path.join(PROJECT_ROOT, "output", "interactivemaps", "interactive_map_debug.html"), folders=folders)
-
-    #assembles a Zenodo-ready deposit (data/: slimmed mobile + edge-aggregated CSVs, empty fixed/;
-    #metadata/: route metadata, OSM graph snapshot, calibration files) into
-    #output/zenodo_package/
+    # Assemble the Zenodo deposit (slimmed point-level and per-edge CSVs plus route metadata
+    # and the OSM graph snapshot) -> output/zenodo_package/. The export date window
+    # (_EXPORT_DATE_MIN/_EXPORT_DATE_MAX) is set in package_for_zenodo.py.
     package_for_zenodo.package_for_zenodo(folders=folders)
+
+    # Apply the hand-made keep/discard/trim/cut decisions in curation/release_curation.json
+    # -> output/zenodo_curated/, the folder that gets uploaded.
+    apply_curation.apply_curation(folders=folders)

@@ -3,14 +3,12 @@
 import numpy as np
 import pandas as pd
 
-import gps_route_matcher.analysis as analysis_module
 from gps_route_matcher.analysis import (
     aggregate_by_edge,
     assemble_output,
     assign_points_to_edges,
     reindex_to_full_route,
 )
-from gps_route_matcher.paths import EDGE_ANALYSIS_SUFFIX
 
 
 def _route_metadata() -> dict:
@@ -117,34 +115,3 @@ def test_assemble_output_column_order():
         "n_points", "includes_interpolated_pts",
     ]
     assert len(out) == 3
-
-
-def test_load_route_recordings_concatenates_and_tags_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(analysis_module, "PROJECT_ROOT", tmp_path)
-    edge_dir = tmp_path / "data" / f"OM_1{EDGE_ANALYSIS_SUFFIX}"
-    edge_dir.mkdir(parents=True)
-
-    def _write(name: str, temp_avg: list[float]) -> None:
-        pd.DataFrame({
-            "edge_order": [0, 1],
-            "u": [1, 2], "v": [2, 3], "key": [0, 0],
-            "length": [10.0, 20.0],
-            "geometry": ["LINESTRING (0 0, 1 0)", "LINESTRING (1 0, 2 0)"],
-            "temperature_avg": temp_avg,
-            "n_points": [5, 3],
-        }).to_csv(edge_dir / name, index=False)
-
-    _write("OM_1_20251009_16_15durmin__REC000135.csv", [20.0, 25.0])
-    _write("OM_1_20251009_17_10durmin__REC000136.csv", [30.0, 35.0])
-    (edge_dir / "not_a_recording.csv").write_text("junk\n")
-
-    long_df = analysis_module.load_route_recordings("OM_1")
-
-    # 2 valid recordings x 2 edges; the non-conforming filename is skipped.
-    assert len(long_df) == 4
-    assert set(long_df["recording_id"]) == {
-        "OM_1_20251009_16_15durmin__REC000135",
-        "OM_1_20251009_17_10durmin__REC000136",
-    }
-    assert set(long_df["date"]) == {"20251009"}
-    assert set(long_df["period"]) == {"tarde"}

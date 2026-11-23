@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gps_route_matcher.paths import PROJECT_ROOT
+from gps_route_matcher.paths import ZENODO_README_PATH
 from gps_route_matcher.zenodo_columns import (
     EDGE_ANALYSIS_COLUMNS,
     MATCHED_COLUMNS,
@@ -91,7 +91,7 @@ def test_matched_columns_are_exactly_the_published_set_in_order():
         "match_status", "matched_edge_u", "matched_edge_v", "matched_edge_key",
         "longitude_raw", "latitude_raw",
     ]
-    assert "PM2.5" in MATCHED_COLUMNS and "PM2.5_cal" not in MATCHED_COLUMNS  # raw only
+    assert "PM2.5" in MATCHED_COLUMNS
     assert "out_of_time_bounds" not in MATCHED_COLUMNS
 
 
@@ -99,16 +99,12 @@ def test_edge_analysis_ships_only_raw_sensor_stats():
     shipped = {entry.get("rename", source) for source, entry in EDGE_ANALYSIS_COLUMNS.items()}
 
     assert {"pm2.5_raw_avg", "pm2.5_raw_max", "temperature_raw_avg", "humidity_raw_max"} <= shipped
-    assert not {"pm1.0_avg", "pm4.0_max", "pm10.0_avg", "pm2.5_avg", "pm2.5_cal_avg"} & shipped
+    assert not {"pm1.0_avg", "pm4.0_max", "pm10.0_avg", "pm2.5_avg"} & shipped
     assert "pm2.5_avg" in EDGE_ANALYSIS_COLUMNS  # the raw source column (renamed on the way out)
-    assert "pm2.5_cal_avg" not in EDGE_ANALYSIS_COLUMNS  # the calibrated one is never shipped
 
 
 def test_zenodo_readme_mentions_every_shipped_column():
-    readme_path = PROJECT_ROOT / "output" / "zenodo_package" / "ZENODO_README.md"
-    if not readme_path.is_file():  # output/ is gitignored; nothing to check on a fresh clone
-        pytest.skip("ZENODO_README.md not present")
-    readme = readme_path.read_text()
+    readme = ZENODO_README_PATH.read_text()
 
     for config in (MATCHED_COLUMNS, EDGE_ANALYSIS_COLUMNS):
         for source, entry in config.items():

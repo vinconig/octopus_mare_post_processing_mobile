@@ -10,8 +10,8 @@ never usable data for an external consumer; the flag is not shipped as a
 column because no shipped row can carry it), apply the column whitelist in
 gps_route_matcher.zenodo_columns (a short, lowercase set of columns, with
 `timestamp` converted to local time UTC-3 and rounded to whole seconds, and
-`temperature_raw`/`humidity_raw`/`pm2.5_raw` being the raw, uncalibrated
-sensor values — no calibrated value ships), and write the result to
+`temperature_raw`/`humidity_raw`/`pm2.5_raw` being the temperature, humidity
+and PM2.5 readings as recorded), and write the result to
 output/zenodo_package/data/mobile/. A walk whose shipped rows touch fewer than
 MIN_MATCHED_EDGES distinct road-network edges is excluded from the package
 entirely (too little network coverage to be a usable trip; see
@@ -23,24 +23,24 @@ actually in the exported file, not the pre-cleaning recording length. The
 paired data/mobile_agg_by_edge/ CSV for the same walk (if present) is exported under
 that identical, recomputed filename, so the two stay joinable by name; its
 own duration is never independently recomputed. It gets the same
-whitelist treatment (raw temperature, humidity and pm2.5 stats only, each
+whitelist treatment (temperature, humidity and pm2.5 stats only, each
 `*_raw_avg`/`*_raw_max`, local-time timestamps). Also copies the companion
 files needed to make the export reproducible/self-contained, under metadata/:
 each track's routes/route_metadata/<track>_inferred_route.json (the
 edge_order/u,v,key anchor) -> metadata/route_metadata/, and
 roadnetwork/mare_openstreetmap_road_graph_2026-11-04.graphml (the OSM
-snapshot those ids refer to) -> metadata/roadnetwork/. No calibration files
-ship, since no calibrated value does.
+snapshot those ids refer to) -> metadata/roadnetwork/.
 
 The package is never curated: it is the complete, deterministic output of the
 automatic gates. The human keep/discard/trim/cut pass is a separate step that
-reads this package (scripts/curate_release.py, a panel over it) and writes a
-second one (scripts/apply_curation.py -> output/zenodo_curated/).
+reads this package and writes a second one (scripts/apply_curation.py ->
+output/zenodo_curated/).
 
 Does not write a README, data dictionary, provenance file or LICENSE — the
 dataset description (including the column reference and the OSM snapshot
-version) is human-authored in output/zenodo_package/ZENODO_README.md, and the
-license is set in Zenodo's own metadata.
+version) is human-authored in release/ZENODO_README.md, which apply_curation.py
+copies into the curated deposit, and the license is set in Zenodo's own
+metadata.
 
 Requires routes/route_metadata/<track>_inferred_route.json to exist for each
 track processed (run infer_route.py first if a track is skipped).
@@ -52,6 +52,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from gps_route_matcher.io import _iter_csv_files
 from gps_route_matcher.paths import (
     EDGE_ANALYSIS_SUFFIX,
     MATCHED_SUFFIX,
@@ -72,7 +73,6 @@ from gps_route_matcher.zenodo_columns import (
     n_distinct_matched_edges,
     real_duration_min,
 )
-from map_matching import _iter_csv_files
 
 # This Zenodo deposit is scoped to one field campaign window: only trip CSVs
 # whose filename date falls in [_EXPORT_DATE_MIN, _EXPORT_DATE_MAX] (inclusive)
@@ -166,7 +166,7 @@ def package_for_zenodo(
             continue
 
         # data/mobile drives the export: data/mobile_agg_by_edge is derived from it
-        # (see output/zenodo_package/ZENODO_README.md), so every walk's inclusion, exclusion, and
+        # (see release/ZENODO_README.md), so every walk's inclusion, exclusion, and
         # exported filename are decided from its matched data alone, then
         # applied identically to the paired edge_analysis file.
         for csv_path in _iter_csv_files(matched_in):
@@ -216,7 +216,7 @@ def package_for_zenodo(
     print(f"    walks excluded (< {MIN_MATCHED_EDGES} distinct matched edges): {n_files_too_few_edges}")
     print(f"    matched rows excluded (out_of_time_bounds): {n_matched_rows_excluded}")
     print(f"    wrote to {out_dir}")
-    print("    NOTE: no README is generated — ZENODO_README.md in the package folder is hand-authored.")
+    print("    NOTE: no README is generated — release/ZENODO_README.md is hand-authored.")
 
 
 def main() -> None:

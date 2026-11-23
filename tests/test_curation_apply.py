@@ -46,7 +46,6 @@ def _source_walk(offset: float = 0.0) -> pd.DataFrame:
         "timestamp": [t.strftime("%Y-%m-%dT%H:%M:%S") for t in utc],
         "matched_lon": -43.25 + i * 1e-5, "matched_lat": -22.84 + i * 1e-5,
         "Temperature": 30.0 + (i % 5) + offset, "Humidity": 60.0 - (i % 7), "PM2.5": 5.0 + i * 0.5,
-        "PM2.5_cal": 9.0 + i * 0.25,  # calibrated sibling: present in the pipeline, must never ship
         "match_status": status,
         "matched_edge_u": (100 + edge).astype(float), "matched_edge_v": (101 + edge).astype(float),
         "matched_edge_key": np.zeros(n),
@@ -87,7 +86,7 @@ def test_only_raw_sensor_columns_ship():
     assert sensor_cols(edges.columns) == [
         f"{s}_raw_{stat}" for s in ("temperature", "humidity", "pm2.5") for stat in ("avg", "max")
     ]
-    # the shipped PM2.5 is the raw reading, not the calibrated one
+    # the shipped PM2.5 is the recorded reading
     assert shipped["pm2.5_raw"].tolist() == _source_walk()["PM2.5"].tolist()
 
 

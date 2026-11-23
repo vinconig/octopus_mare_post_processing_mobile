@@ -1,13 +1,18 @@
-"""I/O helpers: load GPX route files and KML polygon boundaries."""
+"""I/O helpers: load GPX route files and KML polygon boundaries, and read
+the per-trip CSVs under data/."""
 
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import geopandas as gpd
 import gpxpy
 import gpxpy.gpx
+import pandas as pd
 from shapely.geometry import Polygon
+
+from .paths import PROJECT_ROOT, track_from_folder
 
 _KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 
@@ -103,3 +108,44 @@ def load_kml_polygon(path: str) -> gpd.GeoDataFrame:
         names.append(name_el.text if name_el is not None else None)
 
     return gpd.GeoDataFrame({"name": names}, geometry=polygons, crs="EPSG:4326")
+
+
+def _iter_csv_files(folder_path: Path) -> list[Path]:
+    """Top-level CSV files only; nested date/time subfolders hold stray
+    non-standard leftovers and are never visited."""
+    return sorted(
+        p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() == ".csv"
+    )
+
+
+def _load_all_tracks(folders: list[str]) -> pd.DataFrame:
+    """Read every CSV directly inside the given data folders (subdirectories
+    are ignored) and tag each with its source track and file (track_id).
+
+    folders are literal directory names under data/ — pass OM_n_a_raw for the
+    raw per-recording exports or OM_n_c_prepared for the cleaned per-trip splits.
+
+    A pure loader: no rows are dropped and no values are altered. GPS
+    validity and bairro-polygon membership are decided once, in
+    cleaning.clean_gps_dataframe / categorize_oob, as non-destructive flags.
+    """
+    frames: list[pd.DataFrame] = []
+    for folder in folders:
+        folder_path = PROJECT_ROOT / "data" / folder
+        if not folder_path.is_dir():
+            raise FileNotFoundError(
+                f"No such data folder: {folder_path}. Folder names are literal "
+                f"directory names under data/ (e.g. OM_1_a_raw or OM_1_c_prepared)."
+            )
+        for csv_path in _iter_csv_files(folder_path):
+            track_df = pd.read_csv(csv_path)
+            if track_df.empty:
+                continue
+
+            track_df["source_folder"] = track_from_folder(folder)
+            track_df["track_id"] = csv_path.stem
+            frames.append(track_df)
+
+    if not frames:
+        return pd.DataFrame(columns=["Latitude", "Longitude", "source_folder", "track_id"])
+    return pd.concat(frames, ignore_index=True)

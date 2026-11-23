@@ -12,9 +12,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from .paths import EDGE_ANALYSIS_SUFFIX, PROJECT_ROOT
-from .recording_naming import _parse_recording_filename
-
 # Columns produced by the map-matching pipeline (cleaning/gaps/netmatch) that
 # are not environmental sensor readings. Anything else in a matched CSV is
 # treated as an environmental variable to aggregate, so a newly added raw
@@ -39,18 +36,10 @@ _NON_ENV_COLUMNS = {
 # NaN matched_edge_u/v/key).
 _ASSIGNED_STATUSES = {"matched", "interpolated"}
 
-# Base env columns (as produced by aggregate_by_edge's <col>_avg naming) that
-# also get a cross-recording max in aggregate_across_recordings, alongside
-# the mean every other _avg column gets. That cross-recording `_max` is the
-# highest per-recording *average* on the edge, not related to the per-recording
-# `_max` (highest single raw reading) every env column gets from _ENV_STATS.
-_MAX_STAT_BASE_COLUMNS = ["temperature", "pm2.5_cal"]
-
 # Per-environmental-column statistics to compute: output suffix -> pandas agg
 # name. Add "median"/"std"/"min" (or a percentile callable) here to extend
 # the output without touching the aggregation logic itself. These are
-# per-recording, per-edge stats -- distinct from the cross-recording `_max`
-# aggregate_across_recordings computes for _MAX_STAT_BASE_COLUMNS below.
+# per-recording, per-edge stats.
 _ENV_STATS = {"avg": "mean", "max": "max"}
 
 # Output columns that are never environmental statistics.
@@ -203,59 +192,3 @@ def run_edge_analysis(
 ) -> pd.DataFrame:
     """Full per-file pipeline: load the matched CSV, then edge_analysis_from_df."""
     return edge_analysis_from_df(load_matched_route(matched_csv_path), route_metadata)
-
-
-def load_route_recordings(track: str) -> pd.DataFrame:
-    """Concatenate every edge-analysis CSV for one route
-    (data/{track}_e_edge_analysis/*.csv, as written by run_edge_analysis) into
-    a single long DataFrame -- one row per (recording, edge) -- tagged with
-    recording_id/date/period/recid parsed from the filename. Files that don't
-    match the TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv naming
-    convention are skipped, same as the interactive-map recording browser."""
-    in_dir = PROJECT_ROOT / "data" / f"{track}{EDGE_ANALYSIS_SUFFIX}"
-    frames = []
-    for csv_path in sorted(in_dir.glob("*.csv")):
-        parsed = _parse_recording_filename(csv_path.stem)
-        if parsed is None:
-            continue
-        df = pd.read_csv(csv_path)
-        df["recording_id"] = csv_path.stem
-        df["date"] = parsed["date"]
-        df["period"] = parsed["period"]
-        df["recid"] = parsed["recid"]
-        frames.append(df)
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
-
-
-def aggregate_across_recordings(long_df: pd.DataFrame) -> pd.DataFrame:
-    """Collapse a long (recording, edge) DataFrame (see load_route_recordings)
-    to one row per edge_order: every `_avg` column becomes the plain,
-    unweighted mean of that edge's per-recording averages. Recordings where
-    the edge had zero assigned points are already NaN there, so
-    groupby().mean() skips them on its own -- a 1-point recording counts the
-    same as a 50-point one otherwise. n_recordings counts how many
-    recordings had >=1 point on the edge; n_points_total sums n_points
-    across every recording (informational only, not used as a weight).
-
-    Temperature and PM2.5_cal additionally get a `_max` column: the highest
-    per-recording average seen on that edge, i.e. the worst single walk
-    rather than the average of averages."""
-    avg_cols = sorted(c for c in long_df.columns if c.endswith("_avg"))
-    max_cols = [f"{base}_max" for base in _MAX_STAT_BASE_COLUMNS]
-    grouped = long_df.groupby("edge_order", sort=True)
-
-    out = grouped[["u", "v", "key", "length", "geometry"]].first()
-    for col in avg_cols:
-        out[col] = grouped[col].mean()
-    for base in _MAX_STAT_BASE_COLUMNS:
-        out[f"{base}_max"] = grouped[f"{base}_avg"].max()
-    out["n_recordings"] = (long_df["n_points"] > 0).groupby(long_df["edge_order"]).sum().astype(int)
-    out["n_points_total"] = grouped["n_points"].sum()
-
-    ordered_cols = [
-        "edge_order", "u", "v", "key", "length", "geometry",
-        *avg_cols, *max_cols, "n_recordings", "n_points_total",
-    ]
-    return out.reset_index()[ordered_cols].sort_values("edge_order").reset_index(drop=True)

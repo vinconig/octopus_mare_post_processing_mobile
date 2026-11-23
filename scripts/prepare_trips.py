@@ -26,39 +26,26 @@ What is NOT done here, and why:
     stale by the time map matching reads the file. They are computed in the
     matcher, immediately after usable_for_hmm is finalised.
 
-So this stage writes flags plus one calibrated value column (PM2.5_cal, see
-below). No rows are dropped.
+So this stage only adds flag columns. No rows are dropped.
 """
 
 import argparse
-from pathlib import Path
 
 import pandas as pd
 
-from gps_route_matcher.calibration import calibrate_pm25, load_calibration_equations
 from gps_route_matcher.cleaning import categorize_oob, clean_gps_dataframe
 from gps_route_matcher.config import MatchConfig
-from gps_route_matcher.io import load_kml_polygon
+from gps_route_matcher.io import _iter_csv_files, load_kml_polygon
 from gps_route_matcher.paths import (
     BAIRRO_KML_PATH,
-    CALIBRATION_EQUATIONS_PATH,
     PREPARED_SUFFIX,
     PROJECT_ROOT,
     TRACKS,
     WALKS_SUFFIX,
-    warn_if_stale_sibling,
 )
 
 # Written by clean_gps_dataframe / categorize_oob and consumed downstream.
 _FLAG_COLUMNS = ["timestamp_valid", "gps_valid", "gps_inside_polygon"]
-
-
-def _iter_csv_files(folder_path: Path) -> list[Path]:
-    """Top-level CSV files only; nested date/time subfolders hold stray
-    non-standard leftovers and are never visited."""
-    return sorted(
-        p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() == ".csv"
-    )
 
 
 def prepare_trips(
@@ -70,21 +57,11 @@ def prepare_trips(
     writing to sibling data/OM_n_c_prepared/ folders."""
     config = config or MatchConfig()
 
-    print("1/4 Loading bairro polygon …")
+    print("1/3 Loading bairro polygon …")
     polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
 
-    print("2/4 Loading PM2.5 calibration equations …")
-    calibration = load_calibration_equations(CALIBRATION_EQUATIONS_PATH)
-
     target_tracks = folders or TRACKS
-    missing = [t for t in target_tracks if t not in calibration]
-    if missing:
-        raise ValueError(
-            f"No PM2.5 calibration equation for {missing} in "
-            f"{CALIBRATION_EQUATIONS_PATH} — add a Sensor row for each before rerunning."
-        )
-
-    print(f"3/4 Cleaning trips in {target_tracks} …")
+    print(f"2/3 Cleaning trips in {target_tracks} …")
 
     n_files = n_rows = n_skipped = 0
     n_gps_invalid = n_outside_polygon = n_no_timestamp = 0
@@ -94,12 +71,9 @@ def prepare_trips(
         if not in_dir.exists():
             print(f"    skip {track}: {in_dir} not found")
             continue
-        warn_if_stale_sibling(track, in_dir.name)
 
         out_dir = PROJECT_ROOT / "data" / f"{track}{PREPARED_SUFFIX}"
         out_dir.mkdir(parents=True, exist_ok=True)
-
-        intercept, coefficient = calibration[track]
 
         for csv_path in _iter_csv_files(in_dir):
             out_path = out_dir / csv_path.name
@@ -113,7 +87,6 @@ def prepare_trips(
                 continue
 
             cleaned = categorize_oob(clean_gps_dataframe(trip_df, config), polygon)
-            cleaned = calibrate_pm25(cleaned, intercept, coefficient)
             cleaned.to_csv(out_path, index=False)
 
             n_files += 1
@@ -124,7 +97,7 @@ def prepare_trips(
                 (cleaned["gps_valid"] & ~cleaned["gps_inside_polygon"]).sum()
             )
 
-    print("4/4 Summary")
+    print("3/3 Summary")
     print(f"    trips cleaned: {n_files}, skipped: {n_skipped}, rows: {n_rows:,}")
     print(f"    rows without a usable timestamp   : {n_no_timestamp:,}")
     print(f"    rows without a valid GPS fix      : {n_gps_invalid:,}")

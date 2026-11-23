@@ -14,7 +14,7 @@ source file's. An entry may carry:
   `to_local_timestamp`).
 
 What each shipped column means is documented by hand in
-output/zenodo_package/ZENODO_README.md.
+release/ZENODO_README.md.
 """
 
 from datetime import timedelta, timezone
@@ -88,9 +88,9 @@ def _edge_sensor_stats(source: str, shipped: str) -> dict[str, dict[str, Any]]:
     return {f"{source}{suffix}": {"rename": f"{shipped}{suffix}"} for suffix in ("_avg", "_max")}
 
 
-# Mirrors the matched/ sensor selection: raw (uncalibrated) temperature,
-# humidity and PM2.5 only, each shipped with a `_raw` stem like matched/'s
-# `*_raw` columns (e.g. temperature_raw_avg).
+# Mirrors the matched/ sensor selection: temperature, humidity and PM2.5 as
+# recorded, each shipped with a `_raw` stem like matched/'s `*_raw` columns
+# (e.g. temperature_raw_avg).
 EDGE_ANALYSIS_COLUMNS: dict[str, dict[str, Any]] = {
     **_EDGE_CORE_COLUMNS,
     **_edge_sensor_stats("temperature", "temperature_raw"),

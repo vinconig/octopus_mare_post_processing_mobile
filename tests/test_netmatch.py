@@ -17,7 +17,6 @@ from gps_route_matcher.config import (
     MatchConfig,
 )
 from gps_route_matcher.netmatch import (
-    CandidateTraceRow,
     EdgeCandidate,
     GraphIndex,
     NetworkDistanceCache,
@@ -30,7 +29,6 @@ from gps_route_matcher.netmatch import (
     _walk_forward,
     generate_edge_candidates,
     match_trip_to_network_rows,
-    street_key,
 )
 
 
@@ -595,63 +593,6 @@ def test_rows_preserve_input_row_order():
     )
 
 
-def test_rows_trace_sink_records_candidates_and_winning_path():
-    index, inv = _make_l_shaped_index()
-    base = pd.Timestamp("2026-01-01T12:00:00Z")
-    rows = [
-        _row(inv, 660010.0, 7470000.0, base),
-        _row(inv, 660050.0, 7470000.0, base + pd.Timedelta(seconds=30)),
-        _row(inv, 660090.0, 7470000.0, base + pd.Timedelta(seconds=60)),
-    ]
-    trip_df = pd.DataFrame(rows)
-    config = _base_config()
-
-    trace_sink: list[CandidateTraceRow] = []
-    result = match_trip_to_network_rows(trip_df, "t5", index, config, trace_sink=trace_sink)
-
-    assert trace_sink, "trace_sink should be populated when passed in"
-    assert all(isinstance(r, CandidateTraceRow) for r in trace_sink)
-
-    by_obs: dict[int, list[CandidateTraceRow]] = {}
-    for r in trace_sink:
-        by_obs.setdefault(r.obs_index, []).append(r)
-
-    # First observation of the (only) segment has no predecessor.
-    first_obs = min(by_obs)
-    for r in by_obs[first_obs]:
-        assert r.transition_cost is None
-        assert r.pred_obs_index is None
-        assert r.cumulative_cost == pytest.approx(r.emission_cost)
-
-    # Later observations' candidates all have a resolved predecessor + transition cost.
-    for oi, group in by_obs.items():
-        if oi == first_obs:
-            continue
-        for r in group:
-            assert r.transition_cost is not None
-            assert r.pred_obs_index is not None
-            assert r.lon is not None and r.lat is not None
-
-    # The per-term breakdown adds back up to the totals the DP used.
-    for r in trace_sink:
-        assert r.off_route_cost <= r.emission_cost
-        if r.transition_cost is None:
-            assert r.detour_cost is None and r.reversal_cost is None
-        else:
-            terms = r.detour_cost + r.speed_cost + r.reversal_cost + r.blocked_cost
-            assert terms == pytest.approx(r.transition_cost)
-
-    # Exactly one candidate per observation is on the winning path, and its edge
-    # matches the edge actually chosen by match_trip_to_network_rows.
-    matched = result[result["match_status"] == "matched"].set_index("original_index")
-    for oi, group in by_obs.items():
-        winners = [r for r in group if r.is_on_winning_path]
-        assert len(winners) == 1
-        winner = winners[0]
-        row = matched.loc[oi]
-        assert (row["matched_edge_u"], row["matched_edge_v"], row["matched_edge_key"]) == winner.edge
-
-
 # ── candidate generation: never on a node, densified along route edges ──────
 
 
@@ -879,163 +820,15 @@ def test_final_matching_config_sets_a_route_edge_bonus():
 def test_final_matching_config_applies_per_track_overrides():
     om1 = MatchConfig.for_final_matching("OM_1")
     assert (om1.gps_sigma_m, om1.off_route_penalty, om1.route_edge_bonus) == (5.0, 10.0, 5000.0)
-    # Tracks without an entry (and no track at all) get the global defaults.
-    for other in (MatchConfig.for_final_matching("OM_2"), MatchConfig.for_final_matching()):
-        assert other.gps_sigma_m == FINAL_MATCH_GPS_SIGMA_M
-        assert other.off_route_penalty == FINAL_MATCH_OFF_ROUTE_PENALTY
-        assert other.route_edge_bonus == FINAL_MATCH_ROUTE_EDGE_BONUS
-    # Explicit overrides (the sweep/tune scripts) win over the track entry.
+    # No track at all (or one without an entry) gets the global defaults.
+    other = MatchConfig.for_final_matching()
+    assert other.gps_sigma_m == FINAL_MATCH_GPS_SIGMA_M
+    assert other.off_route_penalty == FINAL_MATCH_OFF_ROUTE_PENALTY
+    assert other.route_edge_bonus == FINAL_MATCH_ROUTE_EDGE_BONUS
+    # Explicit keyword overrides win over the track entry.
     assert MatchConfig.for_final_matching("OM_1", gps_sigma_m=0.25).gps_sigma_m == 0.25
 
 
-def test_final_matching_config_shares_sigma_and_adds_penalty():
+def test_final_matching_config_adds_an_off_route_penalty():
     final, default = MatchConfig.for_final_matching(), MatchConfig()
-    assert final.gps_sigma_m == default.gps_sigma_m == 0.25
     assert final.off_route_penalty > 0 and default.off_route_penalty == 0.0
-
-
-# ── list-Viterbi path_sink: top-2 distinct edge sequences per candidate ─────
-
-
-def _diamond_graph():
-    """1 -a-> 2, then two routes to 5 (b,d via 3 and c,e via 4), plus the
-    reverse of a. Edge indices follow _DIAMOND_EDGES."""
-    g = nx.MultiDiGraph()
-    for u, v in _DIAMOND_EDGES:
-        g.add_edge(u, v, key=0, length=10.0)
-    return g
-
-
-_DIAMOND_EDGES = [(1, 2), (2, 3), (2, 4), (3, 5), (4, 5), (2, 1)]
-
-
-_REACHABLE_EDGES = [[0], [0, 1, 2], [1, 2], [1, 2, 3, 4], [3, 4]]   # per obs, walking 1 -> 5
-
-
-def _kbest_fixture(seed, n_obs=5, reachable=False):
-    """Random observations over the diamond graph: 2-4 candidates each, at
-    random offsets with random emission costs.
-
-    reachable=True draws each observation's edges from _REACHABLE_EDGES so a
-    finite path always exists. With fully random edges some states can be
-    unreachable from every predecessor; there the main DP clamps cost at
-    _LARGE_COST (its strict-< update never fires) with an arbitrary
-    back-pointer, while path_sink entries keep the true >=1e12 cost, so the
-    two only agree on the winner when a finite path exists.
-    """
-    rng = np.random.default_rng(seed)
-    config = MatchConfig(gps_sigma_m=1.0, max_speed_mps=1.0, high_speed_penalty=3.0,
-                         network_reversal_penalty=50.0)
-    dist_cache = NetworkDistanceCache(_diamond_graph())
-    index = _RevIndex(np.full(len(_DIAMOND_EDGES), 10.0))
-    ts0 = pd.Timestamp("2026-01-01T00:00:00Z")
-    obs, cands = [], {}
-    for oi in range(n_obs):
-        obs.append((oi, ts0 + pd.Timedelta(seconds=5 * oi), float(rng.uniform(0, 30)), 0.0))
-        cands[oi] = [
-            EdgeCandidate(
-                obs_index=oi, edge_idx=ei, edge=(*_DIAMOND_EDGES[ei], 0),
-                offset_m=float(rng.uniform(1, 9)), distance_m=0.0,
-                emission_cost=float(rng.uniform(0, 5)), x=0.0, y=0.0,
-                off_route_cost=0.0,
-            )
-            for ei in rng.choice(
-                _REACHABLE_EDGES[oi] if reachable else len(_DIAMOND_EDGES),
-                size=int(rng.integers(2, 5)),
-            )
-        ]
-    return obs, cands, index, config, dist_cache
-
-
-def _brute_force_top2_distinct(obs, cands, index, config, dist_cache):
-    """Enumerate every candidate sequence, cost it with the matcher's own
-    cost functions, collapse to edge sequences, and return the two cheapest
-    distinct-sequence costs."""
-    import itertools
-    from gps_route_matcher.netmatch import network_transition_cost
-
-    best: dict[tuple, float] = {}
-    for combo in itertools.product(*[cands[oi] for oi, *_ in obs]):
-        cost = combo[0].emission_cost
-        for t in range(1, len(combo)):
-            _, ts, x, y = obs[t]
-            _, p_ts, p_x, p_y = obs[t - 1]
-            dt_s = (ts - p_ts).total_seconds()
-            cutoff = max(300.0, 2.0 * config.max_speed_mps * max(dt_s, 1.0) + 200.0)
-            nd = dist_cache.route_distance(combo[t - 1], combo[t], index.edge_lengths, cutoff)
-            cost += network_transition_cost(nd, math.hypot(x - p_x, y - p_y), dt_s, config)
-            if _is_reversal(combo[t - 1], combo[t]):
-                cost += config.network_reversal_penalty
-            cost += combo[t].emission_cost
-        streets = [street_key(c.edge) for c in combo]
-        seq = tuple(e for i, e in enumerate(streets) if i == 0 or e != streets[i - 1])
-        best[seq] = min(cost, best.get(seq, math.inf))
-    return sorted(best.values())[:2]
-
-
-@pytest.mark.parametrize("seed", range(12))
-def test_path_sink_top2_matches_brute_force(seed):
-    obs, cands, index, config, dist_cache = _kbest_fixture(seed)
-    path_sink: list = []
-    _viterbi_segment(obs, cands, dist_cache, index, config, path_sink=path_sink)
-
-    last = obs[-1][0]
-    ends = sorted(e.cumulative_cost for e in path_sink if e.obs_index == last)
-    # Distinct sequences across end candidates: group by sig, keep the cheapest.
-    by_sig: dict[int, float] = {}
-    for e in path_sink:
-        if e.obs_index == last:
-            by_sig[e.sig] = min(e.cumulative_cost, by_sig.get(e.sig, math.inf))
-    got = sorted(by_sig.values())[:2]
-    expected = _brute_force_top2_distinct(obs, cands, index, config, dist_cache)
-    assert got == pytest.approx(expected, rel=1e-9)
-    assert ends  # sanity: entries exist
-
-
-@pytest.mark.parametrize("seed", range(6))
-def test_path_sink_rank0_chain_is_the_viterbi_path_and_terms_add_up(seed):
-    obs, cands, index, config, dist_cache = _kbest_fixture(seed, reachable=True)
-    plain = _viterbi_segment(obs, cands, dist_cache, index, config)
-    path_sink: list = []
-    with_sink = _viterbi_segment(obs, cands, dist_cache, index, config, path_sink=path_sink)
-    assert [(c.obs_index, c.edge, c.offset_m) for c in with_sink] == \
-           [(c.obs_index, c.edge, c.offset_m) for c in plain]
-
-    winners = [e for e in path_sink if e.is_on_winning_path]
-    if winners[-1].cumulative_cost >= 1e11:
-        pytest.skip("no reachable path for this random draw (see _kbest_fixture)")
-    assert [(e.obs_index, e.edge) for e in sorted(winners, key=lambda e: e.obs_index)] == \
-           [(c.obs_index, c.edge) for c in plain]
-    assert all(e.rank == 0 for e in winners)
-
-    for e in path_sink:
-        terms = (e.cum_distance + e.cum_off_route + e.cum_detour + e.cum_speed
-                 + e.cum_reversal + e.cum_blocked)
-        assert terms == pytest.approx(e.cumulative_cost, rel=1e-9)
-        # parents precede children, and a rank-1 entry never beats rank 0 on
-        # the same candidate or repeats its edge sequence
-        assert e.parent_id is None or e.parent_id < e.id
-    by_state: dict[tuple[int, int], list] = {}
-    for e in path_sink:
-        by_state.setdefault((e.obs_index, e.candidate_idx), []).append(e)
-    for entries in by_state.values():
-        assert len({e.sig for e in entries}) == len(entries) <= 2
-        assert [e.rank for e in entries] == list(range(len(entries)))
-        assert entries == sorted(entries, key=lambda e: e.cumulative_cost)
-
-
-def test_path_sink_through_match_trip_to_network_rows_leaves_output_unchanged():
-    index, inv = _make_l_shaped_index()
-    base = pd.Timestamp("2026-01-01T12:00:00Z")
-    rows = [
-        _row(inv, 660010.0, 7470000.0, base),
-        _row(inv, 660050.0, 7470000.0, base + pd.Timedelta(seconds=30)),
-        _row(inv, 660090.0, 7470000.0, base + pd.Timedelta(seconds=60)),
-    ]
-    trip_df = pd.DataFrame(rows)
-    config = _base_config()
-    plain = match_trip_to_network_rows(trip_df, "t6", index, config)
-    path_sink: list = []
-    with_sink = match_trip_to_network_rows(trip_df, "t6", index, config, path_sink=path_sink)
-    pd.testing.assert_frame_equal(plain, with_sink)
-    assert path_sink and {e.obs_index for e in path_sink} == {0, 1, 2}

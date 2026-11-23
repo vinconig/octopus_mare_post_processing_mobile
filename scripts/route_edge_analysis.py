@@ -14,17 +14,15 @@ infer_route.py first if a track is skipped as "route metadata not found".
 
 import argparse
 from collections import Counter
-from pathlib import Path
 
 from gps_route_matcher.analysis import load_route_metadata, run_edge_analysis, save_edge_analysis
+from gps_route_matcher.io import _iter_csv_files
 from gps_route_matcher.paths import (
     EDGE_ANALYSIS_SUFFIX,
     MATCHED_SUFFIX,
     PROJECT_ROOT,
     TRACKS,
-    warn_if_stale_sibling,
 )
-from map_matching import _iter_csv_files
 
 
 def route_edge_analysis(
@@ -55,7 +53,6 @@ def route_edge_analysis(
         if not in_dir.exists():
             print(f"    skip {track}: matched data not found ({in_dir})")
             continue
-        warn_if_stale_sibling(track, in_dir.name)
 
         metadata_path = PROJECT_ROOT / "routes" / "route_metadata" / f"{track}_inferred_route.json"
         if not metadata_path.is_file():

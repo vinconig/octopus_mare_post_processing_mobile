@@ -1,8 +1,6 @@
-"""Shared parsing for recording filename conventions, used by both
-visualization.py (to browse matched/edge-analysis recordings) and
-analysis.py (to tag recordings when building a cross-recording DataFrame).
-Kept dependency-light (no plotly/geopandas) so analysis.py doesn't have to
-pull in visualization.py's heavy plotting stack just to reuse this regex.
+"""Shared parsing for recording filename conventions, used by the session
+splitter (the declared capture time), package_for_zenodo.py (the export date
+window) and the curation helpers (trip filenames). Kept dependency-light.
 
 Two conventions are supported:
   TRACK_YYYYMMDD_HR_DURATIONdurmin__RECrecid.csv     (data/OM_<n>_a_raw, the

@@ -1,4 +1,4 @@
-"""Road-network acquisition and caching (OSMnx).
+"""Road-network loading (OSMnx GraphML snapshot).
 
 The graph is a directed networkx MultiDiGraph clipped to the bairro polygon.
 Directionality is preserved throughout: one-way streets and direction of
@@ -11,84 +11,20 @@ from pathlib import Path
 
 import networkx as nx
 import osmnx as ox
-from shapely.geometry import Polygon
 
 from .paths import PROJECT_ROOT
 
 ROADNETWORK_DIR: Path = PROJECT_ROOT / "roadnetwork"
 
-# The one road graph every stage uses (walk network, pulled from OSM on 2026-11-04 after
-# segment edits). Hard-coded on purpose: this was the last planned refresh.
+# The one road graph every stage uses (walk network, pulled from OSM on 2026-11-04).
+# It is tracked in the repo and shipped with the deposit, because the edge ids in
+# the data refer to exactly this snapshot.
 ROAD_GRAPH_PATH: Path = ROADNETWORK_DIR / "mare_openstreetmap_road_graph_2026-11-04.graphml"
-# The pre-refresh snapshot (pulled 2026-08-01), kept only in case it's needed again.
-OLD_ROAD_GRAPH_PATH: Path = ROADNETWORK_DIR / "bairro_walk_old.graphml"
 
 
-def download_road_graph(
-    polygon: Polygon, network_type: str = "all", force_refresh: bool = False
-) -> nx.MultiDiGraph:
-    """Fetch a directed road graph clipped to the polygon from the OSM API.
-
-    Parameters
-    ----------
-    polygon:
-        Boundary polygon in WGS-84 (e.g. the bairro polygon from the KML).
-    network_type:
-        OSMnx network type. "all" includes footpaths/alleys, matching the
-        walking/cycling-speed recordings in this project.
-    force_refresh:
-        Bypass osmnx's own on-disk Overpass response cache (separate from
-        this module's GraphML cache) so recent OSM edits are picked up.
-
-    Returns
-    -------
-    Directed MultiDiGraph in WGS-84 with edge 'length' attributes in metres.
-    """
-    prev_use_cache = ox.settings.use_cache
-    if force_refresh:
-        ox.settings.use_cache = False
-    try:
-        ox.settings.timeout = 60  # seconds
-        return ox.graph_from_polygon(polygon, network_type=network_type, simplify=True)
-    finally:
-        ox.settings.use_cache = prev_use_cache
-
-
-def save_road_graph(graph: nx.MultiDiGraph, path: str | Path) -> Path:
-    """Save a road graph as GraphML so re-runs don't hit the OSM API."""
+def load_road_graph(path: str | Path = ROAD_GRAPH_PATH) -> nx.MultiDiGraph:
+    """Load the saved GraphML road graph; raises if the snapshot is missing."""
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    ox.save_graphml(graph, path)
-    return path
-
-
-def load_road_graph(path: str | Path) -> nx.MultiDiGraph:
-    """Load a previously saved GraphML road graph."""
-    return ox.load_graphml(Path(path))
-
-
-def get_road_graph(
-    polygon: Polygon,
-    network_type: str = "walk",
-    cache_path: str | Path | None = None,
-    force_refresh: bool = False,
-) -> nx.MultiDiGraph:
-    """Return the road graph for the polygon, using the on-disk cache if present.
-
-    The default cache location is ROAD_GRAPH_PATH, whatever the network_type.
-
-    force_refresh:
-        Ignore both this GraphML cache and osmnx's own Overpass response
-        cache, forcing a fresh download from the OSM API. Use this after
-        editing OSM data (e.g. tagging a footway) that should now show up.
-    """
-    if cache_path is None:
-        cache_path = ROAD_GRAPH_PATH
-    cache_path = Path(cache_path)
-
-    if cache_path.exists() and not force_refresh:
-        return load_road_graph(cache_path)
-
-    graph = download_road_graph(polygon, network_type=network_type, force_refresh=force_refresh)
-    save_road_graph(graph, cache_path)
-    return graph
+    if not path.is_file():
+        raise FileNotFoundError(f"Road graph snapshot not found: {path}")
+    return ox.load_graphml(path)

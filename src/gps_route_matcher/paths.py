@@ -21,43 +21,27 @@ MATCHED_SUFFIX = "_d_matched"
 EDGE_ANALYSIS_SUFFIX = "_e_edge_analysis"
 _ALL_SUFFIXES = [RAW_SUFFIX, WALKS_SUFFIX, PREPARED_SUFFIX, MATCHED_SUFFIX, EDGE_ANALYSIS_SUFFIX]
 
-RAW_FOLDERS: list[str] = [f"{t}{RAW_SUFFIX}" for t in TRACKS]
-WALKS_FOLDERS: list[str] = [f"{t}{WALKS_SUFFIX}" for t in TRACKS]
-PREPARED_FOLDERS: list[str] = [f"{t}{PREPARED_SUFFIX}" for t in TRACKS]
-MATCHED_FOLDERS: list[str] = [f"{t}{MATCHED_SUFFIX}" for t in TRACKS]
-EDGE_ANALYSIS_FOLDERS: list[str] = [f"{t}{EDGE_ANALYSIS_SUFFIX}" for t in TRACKS]
-
-# Per-config matched rows cached by scripts/sweep_dropped_points.py (regenerable).
-SWEEP_DIR: Path = PROJECT_ROOT / "output" / "sweep_dropped_points"
-
 BAIRRO_KML_PATH: Path = PROJECT_ROOT / "borders" / "Bairro.kml"
-MARE_WHOLE_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_whole.kml"
-MARE_AREAS_KML_PATH: Path = PROJECT_ROOT / "borders" / "mare_areas.kml"
-CALIBRATION_EQUATIONS_PATH: Path = PROJECT_ROOT / "calibration" / "calibration_equations.csv"
 
 # The Zenodo deposit in two stages: package_for_zenodo.py writes the complete,
 # uncurated package; apply_curation.py reads it plus CURATION_PATH and writes the
-# curated one, which is what gets uploaded. The curation panel reads the package.
+# curated one, which is what gets uploaded.
 ZENODO_PACKAGE_DIR: Path = PROJECT_ROOT / "output" / "zenodo_package"
 ZENODO_CURATED_DIR: Path = PROJECT_ROOT / "output" / "zenodo_curated"
 
-# Hand-made keep/discard/trim/cut decisions for the Zenodo release, written by the
-# curation panel (scripts/curate_release.py) and applied by apply_curation.py.
-# Committed on purpose: unlike output/, these decisions can't be regenerated.
+# Hand-made keep/discard/trim/cut decisions for the Zenodo release, applied by
+# apply_curation.py. Committed on purpose: unlike output/, these decisions can't
+# be regenerated.
 CURATION_PATH: Path = PROJECT_ROOT / "curation" / "release_curation.json"
 
 # Hand-picked route edges per track that get MatchConfig.route_edge_bonus in the
-# final matching (scripts/add_edge_bonus.py edits it; netmatch's bonus_edges
-# reads it via edge_bonus.load_bonus_edges). Committed for the same reason as
-# CURATION_PATH: it is human judgement and can't be regenerated.
+# final matching (netmatch's bonus_edges reads it via edge_bonus.load_bonus_edges).
+# Committed for the same reason as CURATION_PATH: it is human judgement and can't
+# be regenerated.
 EDGE_BONUS_PATH: Path = PROJECT_ROOT / "curation" / "edge_bonus.json"
 
-# Suffixes retired by the a/b/c/d/e rename (including the pre-"_raw" bare
-# convention and the "_b_split"/"_c_walks" names those two stages carried
-# before being renamed to "_b_walks"/"_c_prepared"); used only by
-# warn_if_stale_sibling below, kept separate from _ALL_SUFFIXES so the two
-# can't silently merge back together.
-_OBSOLETE_SUFFIXES = ["_raw", "_trips_split", "_trips_matched", "_trips_edge_analysis", "_trips", "_b_split", "_c_walks", ""]
+# Hand-authored deposit README, copied into the curated deposit by apply_curation.py.
+ZENODO_README_PATH: Path = PROJECT_ROOT / "release" / "ZENODO_README.md"
 
 
 def track_from_folder(folder: str) -> str:
@@ -67,25 +51,3 @@ def track_from_folder(folder: str) -> str:
         if folder.endswith(suffix):
             return folder[: -len(suffix)]
     return folder
-
-
-def ensure_dir(path: Path) -> Path:
-    """Create path (and parents) if missing; return it for chaining."""
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def warn_if_stale_sibling(track: str, canonical_folder: str) -> None:
-    """Print (never delete) a warning if data/<track><old-suffix> still exists
-    next to the canonical folder this stage is about to read/write, so a
-    future naming-convention change can't silently orphan data again. See
-    scripts/migrate_folder_names.py for actually cleaning these up."""
-    data_dir = PROJECT_ROOT / "data"
-    for suffix in _OBSOLETE_SUFFIXES:
-        stale = data_dir / f"{track}{suffix}"
-        if stale.name != canonical_folder and stale.is_dir():
-            print(
-                f"  ! {stale} looks like it's from an old folder-naming convention "
-                f"(this stage now uses data/{canonical_folder}). Not touching it — "
-                f"see scripts/migrate_folder_names.py if it needs migrating/removing."
-            )

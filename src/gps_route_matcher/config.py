@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Final-matching values, tuned with scripts/tune_matching.py.
+# Final-matching values, tuned empirically per track.
 FINAL_MATCH_GPS_SIGMA_M = 0.15
 FINAL_MATCH_OFF_ROUTE_PENALTY = 1000.0
 # Applies only to the hand-curated edges in curation/edge_bonus.json (see
@@ -13,8 +13,8 @@ FINAL_MATCH_ROUTE_EDGE_BONUS = 30.0
 
 # Per-track final-matching settings, keyed by bare track name. A track listed
 # here overrides the FINAL_MATCH_* defaults above for just the fields it names;
-# a track not listed (or None) gets the defaults. Chosen per track from the
-# scripts/sweep_dropped_points.py debug map. Keys are MatchConfig field names.
+# a track not listed (or None) gets the defaults. Chosen per track by reviewing
+# which points each setting drops. Keys are MatchConfig field names.
 FINAL_MATCH_OVERRIDES: dict[str, dict[str, float]] = {
     "OM_2": {
         "gps_sigma_m": 5.0,
@@ -248,7 +248,7 @@ class MatchConfig:
 
         `track` (bare name, e.g. "OM_1") applies that track's entry in
         FINAL_MATCH_OVERRIDES on top of the defaults; explicit keyword
-        overrides (as the sweep/tune scripts pass) win over both."""
+        overrides win over both."""
         params = dict(
             infer_missing_timestamps=True,
             gps_sigma_m=FINAL_MATCH_GPS_SIGMA_M,

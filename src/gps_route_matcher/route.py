@@ -117,13 +117,6 @@ def route_s_to_xy(route: Route1D, s_m: float) -> tuple[float, float]:
     return x, y
 
 
-def route_s_to_lonlat(route: Route1D, s_m: float) -> tuple[float, float]:
-    """Return (lon, lat) WGS-84 at arc-length s_m along the route."""
-    x, y = route_s_to_xy(route, s_m)
-    lon, lat = route.transformer_inv.transform(x, y)
-    return float(lon), float(lat)
-
-
 def project_lonlat_to_route(
     route: Route1D, lon: float, lat: float
 ) -> tuple[float, float]:

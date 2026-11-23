@@ -1,9 +1,10 @@
 """Final, hand-made selection of the walks that ship on Zenodo.
 
 The automatic gates (cleaning, matching, package_for_zenodo's window and
-MIN_MATCHED_EDGES) run first; this is the human pass on top of them. The panel
-(curation_map.py, scripts/curate_release.py) reads the resulting package and
-exports a JSON file that scripts/apply_curation.py applies to it:
+MIN_MATCHED_EDGES) run first; this is the human pass on top of them. The
+decisions were made by hand over the resulting package and are stored as a
+JSON file (curation/release_curation.json) that scripts/apply_curation.py
+applies to it:
 
     {"version": 1,
      "walks": {"OM_1_20251201_afternoon": {"decision": "keep" | "discard",

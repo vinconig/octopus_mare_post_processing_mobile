@@ -10,7 +10,6 @@ from gps_route_matcher.route import (
     auto_utm_crs,
     build_route_1d,
     project_lonlat_to_route,
-    route_s_to_lonlat,
     route_s_to_xy,
 )
 
@@ -60,16 +59,6 @@ def test_project_returns_small_distance_on_route(straight_route):
     lon, lat = _STRAIGHT_ROUTE[2]
     _, dist_m = project_lonlat_to_route(straight_route, lon, lat)
     assert dist_m < 2.0, f"Expected near-zero distance, got {dist_m:.2f} m"
-
-
-def test_route_s_to_lonlat_recovery(straight_route):
-    """route_s_to_lonlat should approximately recover points on the route."""
-    for lon_orig, lat_orig in _STRAIGHT_ROUTE[1:-1]:
-        s, _ = project_lonlat_to_route(straight_route, lon_orig, lat_orig)
-        lon_rec, lat_rec = route_s_to_lonlat(straight_route, s)
-        # Allow 2 m tolerance (≈ 0.00002 degrees)
-        assert abs(lon_rec - lon_orig) < 0.00005
-        assert abs(lat_rec - lat_orig) < 0.00005
 
 
 def test_route_s_to_xy_clamps_at_ends(straight_route):

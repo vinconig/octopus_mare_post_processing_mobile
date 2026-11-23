@@ -1,12 +1,12 @@
-"""Apply the curation panel's decisions to the Zenodo package, writing a second,
-curated package: the one that gets uploaded.
+"""Apply the hand-made keep/discard/trim/cut decisions to the Zenodo package,
+writing a second, curated package: the one that gets uploaded.
 
     package_for_zenodo.py  ->  output/zenodo_package/   complete, never curated
-    curate_release.py      ->  curation/release_curation.json   (human decisions)
+    (human decisions)      ->  curation/release_curation.json
     apply_curation.py      ->  output/zenodo_curated/   package + decisions
 
-Reads output/zenodo_package/ (left untouched, so the panel can always show every
-walk) and curation/release_curation.json, and writes output/zenodo_curated/:
+Reads output/zenodo_package/ (left untouched) and curation/release_curation.json,
+and writes output/zenodo_curated/:
 
 * a walk marked "discard" is left out;
 * a walk with a trim and/or middle cuts loses those rows (surviving rows keep their
@@ -15,42 +15,25 @@ walk) and curation/release_curation.json, and writes output/zenodo_curated/:
   rows. If it then touches fewer than MIN_MATCHED_EDGES road-network edges it is
   left out, like any walk below that gate;
 * every other walk — kept or never reviewed — is copied unchanged;
-* metadata/, ZENODO_README.md and the rest of the package are copied as they are;
-* finally interactive_map.html (the Points / Street Segment browser,
-  visualization.generate_zenodo_interactive_map) is written into the curated
-  folder from the curated files themselves (--no-map skips it).
+* metadata/ and the rest of the package are copied as they are;
+* release/ZENODO_README.md (the hand-authored deposit README) is copied in as
+  ZENODO_README.md.
 
-Run it after every package_for_zenodo.py run and every new export from the panel.
+Run it after every package_for_zenodo.py run and every change to the curation file.
 Format and trim semantics: gps_route_matcher.curation.
 """
 
 import argparse
+import shutil
 from pathlib import Path
 
 from gps_route_matcher.curation_apply import apply_curation as _apply_curation
-from gps_route_matcher.paths import CURATION_PATH, ZENODO_CURATED_DIR, ZENODO_PACKAGE_DIR
-from gps_route_matcher.visualization import generate_zenodo_interactive_map
-from gps_route_matcher.zenodo_columns import EDGE_SUBDIR, MOBILE_SUBDIR
-from package_for_zenodo import _EXPORT_DATE_MAX, _EXPORT_DATE_MIN
-
-MAP_FILENAME = "interactive_map.html"
-
-
-def _write_map(out_dir: Path) -> None:
-    """The Points / Street Segment browser over the curated deposit's own files,
-    written next to them (out_dir/interactive_map.html)."""
-    mobile, edge = out_dir / MOBILE_SUBDIR, out_dir / EDGE_SUBDIR
-    if not (any(mobile.glob("*.csv")) and any(edge.glob("*.csv"))):
-        print("    skip map: no curated walk CSVs to embed")
-        return
-    path = generate_zenodo_interactive_map(
-        matched_dir=mobile,
-        edge_analysis_dir=edge,
-        output_path=str(out_dir / MAP_FILENAME),
-        calendar_min=(int(_EXPORT_DATE_MIN[:4]), int(_EXPORT_DATE_MIN[4:6])),
-        calendar_max=(int(_EXPORT_DATE_MAX[:4]), int(_EXPORT_DATE_MAX[4:6])),
-    )
-    print(f"    wrote {path}")
+from gps_route_matcher.paths import (
+    CURATION_PATH,
+    ZENODO_CURATED_DIR,
+    ZENODO_PACKAGE_DIR,
+    ZENODO_README_PATH,
+)
 
 
 def apply_curation(
@@ -59,7 +42,6 @@ def apply_curation(
     package_dir: Path = ZENODO_PACKAGE_DIR,
     out_dir: Path = ZENODO_CURATED_DIR,
     curation_path: Path | None = CURATION_PATH,
-    make_map: bool = True,
 ) -> None:
     """folders takes bare track names ("OM_1"), like every stage script."""
     s = _apply_curation(folders=folders, overwrite=overwrite, package_dir=package_dir,
@@ -72,9 +54,8 @@ def apply_curation(
     if s.unmatched_keys:
         print(f"    WARNING: {len(s.unmatched_keys)} curation entries match no walk in the package "
               f"(renamed/removed?): {', '.join(s.unmatched_keys[:5])}{' …' if len(s.unmatched_keys) > 5 else ''}")
+    shutil.copy2(ZENODO_README_PATH, out_dir / "ZENODO_README.md")
     print(f"    wrote to {out_dir}")
-    if make_map:
-        _write_map(out_dir)
 
 
 def main() -> None:
@@ -89,16 +70,13 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=ZENODO_CURATED_DIR,
                         help="Where to write the curated package (default: %(default)s)")
     parser.add_argument("--curation", type=Path, default=CURATION_PATH,
-                        help="Curation file from the panel (default: %(default)s)")
+                        help="Curation file (default: %(default)s)")
     parser.add_argument("--no-curation", action="store_true",
                         help="Ignore the curation file: the output is a plain copy of the package")
-    parser.add_argument("--no-map", dest="make_map", action="store_false",
-                        help=f"Don't write {MAP_FILENAME} into the curated package")
     args = parser.parse_args()
 
     apply_curation(folders=args.folders, overwrite=args.overwrite, package_dir=args.package_dir,
-                   out_dir=args.out_dir, curation_path=None if args.no_curation else args.curation,
-                   make_map=args.make_map)
+                   out_dir=args.out_dir, curation_path=None if args.no_curation else args.curation)
 
 
 if __name__ == "__main__":

@@ -1,23 +1,22 @@
 """Infer the ground-truth route for the bairro from all recorded trips.
 
-Pipeline: load bairro polygon → fetch/cache road graph → load all trips →
+Pipeline: load bairro polygon and road graph → load all trips →
 HMM-match each trip to the road network → count edge traversals → cluster
-trip endpoints → highest-support path → export GPX + frequency visualization.
+trip endpoints → highest-support path → export GPX + route metadata.
 
 The resulting GPX is the route that scripts/map_matching.py's network matcher
 then matches future recordings against.
 """
 
 import argparse
-import json
-import os
-import webbrowser
+
+import numpy as np
 
 from gps_route_matcher.config import MatchConfig, RouteInferenceConfig
-from gps_route_matcher.io import load_kml_polygon, write_gpx_route
+from gps_route_matcher.io import _load_all_tracks, load_kml_polygon, write_gpx_route
 from gps_route_matcher.netmatch import build_graph_index, match_all_trips
-from gps_route_matcher.paths import BAIRRO_KML_PATH, PREPARED_SUFFIX, PROJECT_ROOT, RAW_SUFFIX, TRACKS, warn_if_stale_sibling
-from gps_route_matcher.roadnet import get_road_graph
+from gps_route_matcher.paths import BAIRRO_KML_PATH, PREPARED_SUFFIX, PROJECT_ROOT, RAW_SUFFIX, TRACKS
+from gps_route_matcher.roadnet import load_road_graph
 from gps_route_matcher.route_inference import (
     build_edge_counts,
     determine_endpoints,
@@ -25,10 +24,8 @@ from gps_route_matcher.route_inference import (
     edge_sequence_to_points,
     highest_support_path,
     path_count_diagnostics,
-    save_edge_counts,
     save_route_metadata,
 )
-from gps_route_matcher.visualization import _load_all_tracks, generate_tracks_matched
 
 
 def _parse_latlon(s: str | None) -> tuple[float, float] | None:
@@ -46,8 +43,6 @@ def infer_route(
     start: str | tuple[float, float] | None = None,
     end: str | tuple[float, float] | None = None,
     via: str | tuple[float, float] | None = None,
-    no_browser: bool = False,
-    force_refresh: bool = False,
     overwrite: bool = True,
 ) -> None:
     """Infer the ground-truth route for the bairro from recorded trips.
@@ -77,12 +72,6 @@ def infer_route(
     via:
         Force the path through this point (two Dijkstra legs); also what
         loop routes use automatically.
-    no_browser:
-        Don't open the visualization when done.
-    force_refresh:
-        Bypass both the roadnetwork GraphML cache and osmnx's own Overpass
-        response cache, forcing a fresh OSM download (use after editing OSM
-        data).
     overwrite:
         If False and this tag's GPX already exists, skip the run entirely.
     """
@@ -96,10 +85,6 @@ def infer_route(
     input_suffix = RAW_SUFFIX if stage == "raw" else PREPARED_SUFFIX
     input_folders = [f"{t}{input_suffix}" for t in target_tracks]
 
-    out_dir = PROJECT_ROOT / "output" / "interactivemaps"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    inter_dir = out_dir / "intermediate"
-    inter_dir.mkdir(parents=True, exist_ok=True)
     # Per-track runs write to distinct files so they don't overwrite each
     # other; a non-default stage gets its own tag suffix so an experimental
     # raw-data run never collides with the canonical prepared-based route.
@@ -112,9 +97,6 @@ def infer_route(
         print(f"skip {tag}: {gpx_path} already exists")
         return
 
-    for track in target_tracks:
-        warn_if_stale_sibling(track, f"{track}{input_suffix}")
-
     match_cfg = MatchConfig()          # column names already default to the CSV schema
     infer_cfg = RouteInferenceConfig(
         gamma=gamma,
@@ -123,12 +105,12 @@ def infer_route(
         via_latlon=latlon(via),
     )
 
-    print("1/6 Loading bairro polygon and road graph …")
+    print("1/5 Loading bairro polygon and road graph …")
     polygon = load_kml_polygon(str(BAIRRO_KML_PATH)).union_all()
-    graph = get_road_graph(polygon, network_type="walk", force_refresh=force_refresh) #walk: bidirectional for one-way streets (pedestrians can walk both ways), still includes service roads/paths
+    graph = load_road_graph()
     print(f"    graph: {len(graph.nodes)} nodes, {len(graph.edges)} directed edges")
 
-    print("2/6 Loading trips and preprocessing data …")
+    print("2/5 Loading trips and preprocessing data …")
     # Trips arrive already carrying their cleaning flags from
     # scripts/prepare_trips.py; the matcher adds only what needs a route,
     # which is precisely what this stage is about to produce.
@@ -139,7 +121,7 @@ def infer_route(
         tracks = tracks[tracks["track_id"].isin(trip_ids)]
     print(f"    {len(trip_ids)} trips, {len(tracks)} points")
 
-    print("3/6 Matching trips to the road network …")
+    print("3/5 Matching trips to the road network …")
     index = build_graph_index(graph)
     results = match_all_trips(tracks, index, match_cfg, polygon=polygon)
     matched = [r for r in results if r.edge_sequence]
@@ -147,28 +129,17 @@ def infer_route(
           f"({sum(r.n_bridged_gaps for r in results)} gaps bridged, "
           f"{sum(r.n_gaps_left_open for r in results)} left open)")
 
-    # Persist per-trip edge sequences for diagnostics (trip identity kept).
-    seq_path = inter_dir / f"trip_edge_sequences_{tag}.json"
-    with open(seq_path, "w") as fh:
-        json.dump(
-            {r.trip_id: r.edge_sequence for r in matched}, fh, default=list
-        )
-    print(f"    per-trip edge sequences → {seq_path}")
-
-    print("4/6 Building frequency-weighted graph …")
+    print("4/5 Building frequency-weighted graph …")
     counted = build_edge_counts(graph, matched)
-    counts_path = save_edge_counts(counted, inter_dir / f"edge_counts_{tag}.geojson")
-    print(f"    edge counts → {counts_path}")
 
     # Network-wide traversal summary for sanity checking the evidence base.
-    import numpy as np
     counts = np.array([d["count"] for _, _, d in counted.edges(data=True)])
     traversed = counts[counts > 0]
     print(f"    {len(traversed)}/{len(counts)} edges traversed | "
           f"count p50={np.median(traversed):.0f} p90={np.percentile(traversed, 90):.0f} "
           f"max={traversed.max()}" if len(traversed) else "    no edges traversed")
 
-    print("5/6 Determining endpoints and highest-support path …")
+    print("5/5 Determining endpoints and highest-support path …")
     start_node, end_node = determine_endpoints(matched, tracks, index, infer_cfg)
     print(f"    start node: {start_node}, end node: {end_node}")
 
@@ -182,7 +153,7 @@ def infer_route(
     path_edges = highest_support_path(counted, start_node, end_node, infer_cfg, via_node)
     path_count_diagnostics(counted, path_edges)
 
-    print("6/6 Exporting GPX and visualization …")
+    print("    Exporting GPX and route metadata …")
     route_points = edge_sequence_to_points(graph, path_edges)
     write_gpx_route(route_points, str(gpx_path), name=f"Inferred route ({tag})")
     print(f"    GPX → {gpx_path}")
@@ -190,14 +161,6 @@ def infer_route(
     metadata_path = PROJECT_ROOT / "routes" / "route_metadata" / f"{tag}_inferred_route.json"
     save_route_metadata(graph, path_edges, route_id=tag, path=metadata_path)
     print(f"    route metadata → {metadata_path}")
-
-    viz_path = generate_tracks_matched(
-        counted, str(out_dir / f"{tag}_edge_traversal_frequency.html"), route_points
-    )
-    print(f"    visualization → {viz_path}")
-
-    if not no_browser:
-        webbrowser.open(f"file://{viz_path}")
 
 
 def main() -> None:
@@ -221,12 +184,6 @@ def main() -> None:
     parser.add_argument("--via", type=str, default=None, metavar="LAT,LON",
                         help="Force the path through this point (two Dijkstra legs); "
                              "also what loop routes use automatically")
-    parser.add_argument("--no-browser", action="store_true",
-                        help="Don't open the visualization when done")
-    parser.add_argument("--force-refresh", action="store_true",
-                        help="Bypass both the roadnetwork GraphML cache and osmnx's "
-                             "own Overpass response cache, forcing a fresh OSM download "
-                             "(use after editing OSM data)")
     parser.add_argument("--no-overwrite", dest="overwrite", action="store_false",
                         help="Skip this run if its GPX output already exists")
     args = parser.parse_args()
@@ -239,8 +196,6 @@ def main() -> None:
         start=args.start,
         end=args.end,
         via=args.via,
-        no_browser=args.no_browser,
-        force_refresh=args.force_refresh,
         overwrite=args.overwrite,
     )
 

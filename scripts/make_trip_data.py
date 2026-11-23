@@ -45,7 +45,7 @@ import argparse
 import pandas as pd
 
 from gps_route_matcher.config import MatchConfig
-from gps_route_matcher.paths import PROJECT_ROOT, RAW_SUFFIX, TRACKS, WALKS_SUFFIX, warn_if_stale_sibling
+from gps_route_matcher.paths import PROJECT_ROOT, RAW_SUFFIX, TRACKS, WALKS_SUFFIX
 from gps_route_matcher.sessions import (
     SESSION_ID_COL,
     SESSION_PERIOD_COL,
@@ -183,7 +183,6 @@ def make_trip_data(
     print(f"1/2 Cleaning and concatenating raw recordings for {target_tracks} …")
     concatenated_by_track: dict[str, pd.DataFrame] = {}
     for track in target_tracks:
-        warn_if_stale_sibling(track, f"{track}{RAW_SUFFIX}")
         concatenated = concatenate_sensor(track, config, overwrite)
         if concatenated is not None:
             concatenated_by_track[track] = concatenated
