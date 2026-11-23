@@ -155,6 +155,7 @@ def infer_route(
 
     print("    Exporting GPX and route metadata …")
     route_points = edge_sequence_to_points(graph, path_edges)
+    gpx_path.parent.mkdir(parents=True, exist_ok=True)
     write_gpx_route(route_points, str(gpx_path), name=f"Inferred route ({tag})")
     print(f"    GPX → {gpx_path}")
 
