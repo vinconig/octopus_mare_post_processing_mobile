@@ -1,63 +1,71 @@
 # DenoiseGPS
 
-A GPS map-matching pipeline for wearable air-quality sensor recordings (OM_1..OM_4) walked through a Rio de Janeiro bairro. Raw, noisy lat/lon + timestamp CSVs are cleaned, snapped onto the real road network (OpenStreetMap via OSMnx) using an HMM/Viterbi matcher, aggregated per road edge, and rendered as interactive HTML maps.
+Code that turns raw recordings from four wearable air-quality sensors (OM_1..OM_4), walked through a Rio de Janeiro bairro, into the released dataset. Raw, noisy lat/lon + timestamp CSVs are cleaned, snapped onto the real road network (OpenStreetMap via OSMnx) with an HMM/Viterbi map matcher, aggregated per road edge, and packaged into the deposit folder `output/zenodo_curated/`.
+
+The deposit's own description (columns, methodology, licence) is in [`release/ZENODO_README.md`](release/ZENODO_README.md).
 
 ## Setup
 
+Python 3.11. Dependencies are pinned exactly, because reproducing the released files byte for byte depends on the numerical behaviour of these versions.
+
 ```bash
-pip install -e ".[dev,viz,gdrive]"
+pip install -e ".[dev]"
 ```
 
-- `dev` — pytest
-- `viz` — plotly (interactive maps)
-- `gdrive` — Google Drive download script (`scripts/download_gdrive_data.py`)
+## Input data
+
+The raw per-recording exports are not part of this repository. Place them, one folder per sensor, in:
+
+```
+data/OM_1_a_raw/   data/OM_2_a_raw/   data/OM_3_a_raw/   data/OM_4_a_raw/
+```
+
+with file names of the form `OM_n_YYYYMMDD_HH_Ddurmin__RECrecid.csv`.
+
+[PLACEHOLDER: where the raw recordings can be obtained.]
 
 ## Usage
 
 ```bash
-# Run the full pipeline (download → trip-splitting → route inference → map matching → edge analysis → maps)
+# Run the whole pipeline, raw recordings -> output/zenodo_curated/
 python scripts/main.py
 
 # Run all tests
 python -m pytest
-
-# Run a single test file / test
-python -m pytest tests/test_netmatch.py
-python -m pytest tests/test_netmatch.py::test_name -q
 ```
 
-There is no lint/format command configured in this repo.
+Every stage is also a script of its own (`python scripts/<stage>.py --help`); each takes `--folders OM_2 ...` to restrict it to some tracks.
 
-## Architecture
+## Pipeline
 
-### The matcher and its shared building blocks
+Each stage reads the previous stage's folder and writes the next one. Folders are named `OM_n_<letter>_<stage>`, the letter encoding processing order (`a_raw` → `b_walks` → `c_prepared` → `d_matched` → `e_edge_analysis`); the names and the track list are defined once in `src/gps_route_matcher/paths.py`.
 
-`netmatch.py` is the map matcher: states are `(edge, offset)` positions on any edge of a directed `networkx` road graph (`roadnet.py`, via OSMnx). It's used both for inferring the ground-truth route from many trips (`route_inference.py`) and for the final per-trip matching in `scripts/map_matching.py`. Both entry points share the same Viterbi cost model (emission = squared distance / 2σ²; transition = network-detour penalty + high-speed penalty using *real* elapsed time, not a fixed step), gap detection/segmentation (`gaps.py`), and input cleaning/validation (`cleaning.py`).
+1. **`make_trip_data.py`** — validates each raw recording's timestamps, concatenates them per sensor, and cuts the stream into one CSV per walk (`data/OM_n_b_walks/`). Rows that reach no walk go to `data/OM_n_quarantine.csv` with a reason.
+2. **`prepare_trips.py`** — route-independent GPS cleaning, as flag columns only (`data/OM_n_c_prepared/`); no rows are dropped.
+3. **`infer_route.py`** — HMM-matches all walks of a track onto the road graph, counts directed-edge traversals and finds the highest-support path between the route's endpoints. Writes `routes/Inferred_Route_OM_n.gpx` and `routes/route_metadata/OM_n_inferred_route.json`. The endpoints are set by hand in `scripts/main.py`.
+4. **`map_matching.py`** — matches every walk onto the road graph against its inferred route, with per-track settings from `config.FINAL_MATCH_OVERRIDES` and the hand-picked route edges in `curation/edge_bonus.json` (`data/OM_n_d_matched/`).
+5. **`route_edge_analysis.py`** — aggregates the matched points into one row per route edge with per-edge summary statistics (`data/OM_n_e_edge_analysis/`).
+6. **`package_for_zenodo.py`** — keeps the walks inside the export date window, applies the shipped column whitelist (`zenodo_columns.py`) and copies the route metadata and the road-graph snapshot (`output/zenodo_package/`).
+7. **`apply_curation.py`** — applies the hand-made keep/discard/trim/cut decisions in `curation/release_curation.json` and copies in the deposit README (`output/zenodo_curated/`, the folder to upload).
 
-All tunable parameters live in one place: `src/gps_route_matcher/config.py` (`MatchConfig` dataclass) — GPS sigma, candidate radius/k, gap thresholds, speed/reversal penalties, timestamp-outlier detection window, out-of-bounds buffer, etc.
+All tunable matching parameters live in `src/gps_route_matcher/config.py` (`MatchConfig`).
 
-### End-to-end pipeline (`scripts/main.py`)
+## Committed inputs
 
-Each stage reads the previous stage's output directory and writes a new one. Folders are the unit of work, named `OM_n_<letter>_<stage>` — the letter encodes processing order (`a_raw` → `b_walks` → `c_prepared` → `d_matched` → `e_edge_analysis`), defined once in `src/gps_route_matcher/paths.py` and imported everywhere else:
+| Path | What |
+| --- | --- |
+| `roadnetwork/mare_openstreetmap_road_graph_2026-11-04.graphml` | The OSM road-network snapshot every edge id refers to. A missing file is an error; the pipeline never downloads a graph. |
+| `borders/Bairro.kml` | Boundary of the studied area. |
+| `curation/edge_bonus.json` | Hand-picked route edges that get a matching bonus (see `docs/matching_methodology.md`). |
+| `curation/release_curation.json` | Hand-made keep/discard/trim/cut decisions for the released walks. |
+| `release/ZENODO_README.md` | The deposit's README. |
 
-1. **`download_gdrive_data.py`** — pulls raw per-recording CSVs from Google Drive (OAuth; run once, then commented out). Writes to `data/OM_n_a_raw/`.
-2. **`make_trip_data.py`** — concatenates raw per-track CSVs (`data/OM_n_a_raw/` → `data/OM_n_concatenated.csv`), then splits by date + morning/afternoon time window into one CSV per trip (`data/OM_n_b_walks/`).
-3. **`infer_route.py`** — HMM-matches all trips for a track onto the OSM road graph, counts directed-edge traversals, clusters trip endpoints (or uses manually supplied lat/lon endpoints), and computes the highest-support path via Dijkstra with a `length / (count+1)^gamma` cost. Exports a GPX (`routes/Inferred_Route_OM_n.gpx`) and route metadata (`routes/route_metadata/`). Only needs to redownload/cache the road graph once (`force_refresh` on the first track).
-4. **`map_matching.py`** — network-matches every raw trip CSV onto the road graph, writing enriched CSVs to `data/OM_n_d_matched/` (adds matched edge, timestamp inference, match status, interpolation, etc.).
-5. **`route_edge_analysis.py`** — aggregates point-level matched CSVs into one row per road-network edge (in route order) with per-edge environmental summary stats, writing to `data/OM_n_e_edge_analysis/`. Column classification for "environmental vs. pipeline metadata" is centralized in `analysis.py`'s `_NON_ENV_COLUMNS` — new raw sensor columns are picked up automatically as long as they're not added to that set.
-6. **`generate_map_info.py`** — computes map pan/zoom info.
-7. **`visualization.py`** — renders interactive Plotly/Leaflet HTML maps to `output/`. `generate_interactive_map_all_data_incl_edges` is the current main data panel (single map with all trip data + edge analysis); it superseded and merged the older `generate_interactive_map_all_edge_data` / `generate_interactive_map_all_data` (kept as separate functions but no longer both driven from `main.py`).
+## Documentation
 
-### Filesystem conventions
-
-- `paths.PROJECT_ROOT` is derived from the installed package location (`src/gps_route_matcher/paths.py`), not cwd — always import it rather than hardcoding paths. `paths.py` also owns the track list (`TRACKS`) and every stage's folder suffix — import these rather than re-deriving a folder name locally.
-- `roadnet.py` caches the downloaded OSM graph under `roadnetwork/`. Every stage uses the one hard-coded `roadnet.ROAD_GRAPH_PATH` (`mare_openstreetmap_road_graph_<date_of_pull>.graphml`, the final refresh); the pre-refresh graph is kept as `bairro_walk_old.graphml` (`OLD_ROAD_GRAPH_PATH`) and nothing reads it. `route_inference.py` reads/writes `routes/`.
-- Recording filenames follow one of two conventions, parsed centrally by `recording_naming.py` (used by both `visualization.py` and `analysis.py` so the regex logic isn't duplicated):
-  - `OM_n_YYYYMMDD_HH_Ddurmin__RECrecid.csv` — raw per-recording exports (`data/OM_n_a_raw/`)
-  - `OM_n_YYYYMMDD_<morning|afternoon>_Ddurmin.csv` — one file per trip (`data/OM_n_c_prepared/`)
-- `data/`, `output/`, `cache/`, and `NotebooksCassiano/` are gitignored, as are all `*.csv`/`*.html` files anywhere — treat them as regenerable/local-only, never expect them to be committed.
-- `credentials.json` / `token.json` (Google Drive OAuth) exist at repo root and are gitignored — never commit them.
+- [`docs/cleaning_methodology.md`](docs/cleaning_methodology.md) — which cleaning step runs at which stage, and why.
+- [`docs/matching_methodology.md`](docs/matching_methodology.md) — the matcher's cost model and how its parameters interact.
+- [`docs/raw_data_information.md`](docs/raw_data_information.md) — what the recordings are, and which constants and behaviours are deliberate.
 
 ## Tests
 
-`tests/` mirrors the `src/gps_route_matcher/` modules (`test_cleaning.py`, `test_netmatch.py`, `test_route_inference.py`, `test_route_projection.py`, `test_analysis.py`). No test touches live network/OSM downloads or Google Drive — those integration paths (`roadnet.py`, `download_gdrive_data.py`) are exercised only via `scripts/`.
+`tests/` mirrors the modules in `src/gps_route_matcher/`. No test needs the network or the raw data.
