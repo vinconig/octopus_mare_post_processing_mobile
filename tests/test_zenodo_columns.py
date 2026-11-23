@@ -1,11 +1,10 @@
-"""Tests for the Zenodo export column policy (whitelist/rename/transform/order) and its README documentation."""
+"""Tests for the Zenodo export column policy (whitelist/rename/transform/order)."""
 
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from gps_route_matcher.paths import ZENODO_README_PATH
 from gps_route_matcher.zenodo_columns import (
     EDGE_ANALYSIS_COLUMNS,
     MATCHED_COLUMNS,
@@ -101,12 +100,3 @@ def test_edge_analysis_ships_only_raw_sensor_stats():
     assert {"pm2.5_raw_avg", "pm2.5_raw_max", "temperature_raw_avg", "humidity_raw_max"} <= shipped
     assert not {"pm1.0_avg", "pm4.0_max", "pm10.0_avg", "pm2.5_avg"} & shipped
     assert "pm2.5_avg" in EDGE_ANALYSIS_COLUMNS  # the raw source column (renamed on the way out)
-
-
-def test_zenodo_readme_mentions_every_shipped_column():
-    readme = ZENODO_README_PATH.read_text()
-
-    for config in (MATCHED_COLUMNS, EDGE_ANALYSIS_COLUMNS):
-        for source, entry in config.items():
-            shipped = entry.get("rename", source)
-            assert f"`{shipped}`" in readme, f"{shipped} is shipped but not documented in ZENODO_README.md"

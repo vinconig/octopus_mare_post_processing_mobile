@@ -2,8 +2,6 @@
 
 Code that turns raw recordings from four wearable air-quality sensors (OM_1..OM_4), walked through a Rio de Janeiro bairro, into the released dataset. Raw, noisy lat/lon + timestamp CSVs are cleaned, snapped onto the real road network (OpenStreetMap via OSMnx) with an HMM/Viterbi map matcher, aggregated per road edge, and packaged into the deposit folder `output/zenodo_curated/`.
 
-The deposit's own description (columns, methodology, licence) is in [`release/ZENODO_README.md`](release/ZENODO_README.md).
-
 ## Setup
 
 Python 3.11. Dependencies are pinned exactly, because reproducing the released files byte for byte depends on the numerical behaviour of these versions.
@@ -46,7 +44,7 @@ Each stage reads the previous stage's folder and writes the next one. Folders ar
 4. **`map_matching.py`** — matches every walk onto the road graph against its inferred route, with per-track settings from `config.FINAL_MATCH_OVERRIDES` and the hand-picked route edges in `curation/edge_bonus.json` (`data/OM_n_d_matched/`).
 5. **`route_edge_analysis.py`** — aggregates the matched points into one row per route edge with per-edge summary statistics (`data/OM_n_e_edge_analysis/`).
 6. **`package_for_zenodo.py`** — keeps the walks inside the export date window, applies the shipped column whitelist (`zenodo_columns.py`) and copies the route metadata and the road-graph snapshot (`output/zenodo_package/`).
-7. **`apply_curation.py`** — applies the hand-made keep/discard/trim/cut decisions in `curation/release_curation.json` and copies in the deposit README (`output/zenodo_curated/`, the folder to upload).
+7. **`apply_curation.py`** — applies the hand-made keep/discard/trim/cut decisions in `curation/release_curation.json` (`output/zenodo_curated/`, the folder to upload).
 
 All tunable matching parameters live in `src/gps_route_matcher/config.py` (`MatchConfig`).
 
@@ -56,15 +54,8 @@ All tunable matching parameters live in `src/gps_route_matcher/config.py` (`Matc
 | --- | --- |
 | `roadnetwork/mare_openstreetmap_road_graph_2026-11-04.graphml` | The OSM road-network snapshot every edge id refers to. A missing file is an error; the pipeline never downloads a graph. |
 | `borders/Bairro.kml` | Boundary of the studied area. |
-| `curation/edge_bonus.json` | Hand-picked route edges that get a matching bonus (see `docs/matching_methodology.md`). |
+| `curation/edge_bonus.json` | Hand-picked route edges that get a matching bonus. |
 | `curation/release_curation.json` | Hand-made keep/discard/trim/cut decisions for the released walks. |
-| `release/ZENODO_README.md` | The deposit's README. |
-
-## Documentation
-
-- [`docs/cleaning_methodology.md`](docs/cleaning_methodology.md) — which cleaning step runs at which stage, and why.
-- [`docs/matching_methodology.md`](docs/matching_methodology.md) — the matcher's cost model and how its parameters interact.
-- [`docs/raw_data_information.md`](docs/raw_data_information.md) — what the recordings are, and which constants and behaviours are deliberate.
 
 ## Tests
 

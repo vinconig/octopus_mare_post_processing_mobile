@@ -37,10 +37,7 @@ reads this package and writes a second one (scripts/apply_curation.py ->
 output/zenodo_curated/).
 
 Does not write a README, data dictionary, provenance file or LICENSE — the
-dataset description (including the column reference and the OSM snapshot
-version) is human-authored in release/ZENODO_README.md, which apply_curation.py
-copies into the curated deposit, and the license is set in Zenodo's own
-metadata.
+license is set in Zenodo's own metadata.
 
 Requires routes/route_metadata/<track>_inferred_route.json to exist for each
 track processed (run infer_route.py first if a track is skipped).
@@ -165,8 +162,8 @@ def package_for_zenodo(
             print(f"    skip {track} matched: not found ({matched_in})")
             continue
 
-        # data/mobile drives the export: data/mobile_agg_by_edge is derived from it
-        # (see release/ZENODO_README.md), so every walk's inclusion, exclusion, and
+        # data/mobile drives the export: data/mobile_agg_by_edge is derived from it,
+        # so every walk's inclusion, exclusion, and
         # exported filename are decided from its matched data alone, then
         # applied identically to the paired edge_analysis file.
         for csv_path in _iter_csv_files(matched_in):
@@ -216,7 +213,7 @@ def package_for_zenodo(
     print(f"    walks excluded (< {MIN_MATCHED_EDGES} distinct matched edges): {n_files_too_few_edges}")
     print(f"    matched rows excluded (out_of_time_bounds): {n_matched_rows_excluded}")
     print(f"    wrote to {out_dir}")
-    print("    NOTE: no README is generated — release/ZENODO_README.md is hand-authored.")
+    print("    NOTE: no README is generated.")
 
 
 def main() -> None:

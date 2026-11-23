@@ -40,9 +40,6 @@ CURATION_PATH: Path = PROJECT_ROOT / "curation" / "release_curation.json"
 # be regenerated.
 EDGE_BONUS_PATH: Path = PROJECT_ROOT / "curation" / "edge_bonus.json"
 
-# Hand-authored deposit README, copied into the curated deposit by apply_curation.py.
-ZENODO_README_PATH: Path = PROJECT_ROOT / "release" / "ZENODO_README.md"
-
 
 def track_from_folder(folder: str) -> str:
     """Strip a known stage suffix, returning the bare track name (e.g. 'OM_1').

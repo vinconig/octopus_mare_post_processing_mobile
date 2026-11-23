@@ -15,16 +15,13 @@ and writes output/zenodo_curated/:
   rows. If it then touches fewer than MIN_MATCHED_EDGES road-network edges it is
   left out, like any walk below that gate;
 * every other walk — kept or never reviewed — is copied unchanged;
-* metadata/ and the rest of the package are copied as they are;
-* release/ZENODO_README.md (the hand-authored deposit README) is copied in as
-  ZENODO_README.md.
+* metadata/ and the rest of the package are copied as they are.
 
 Run it after every package_for_zenodo.py run and every change to the curation file.
 Format and trim semantics: gps_route_matcher.curation.
 """
 
 import argparse
-import shutil
 from pathlib import Path
 
 from gps_route_matcher.curation_apply import apply_curation as _apply_curation
@@ -32,7 +29,6 @@ from gps_route_matcher.paths import (
     CURATION_PATH,
     ZENODO_CURATED_DIR,
     ZENODO_PACKAGE_DIR,
-    ZENODO_README_PATH,
 )
 
 
@@ -54,7 +50,6 @@ def apply_curation(
     if s.unmatched_keys:
         print(f"    WARNING: {len(s.unmatched_keys)} curation entries match no walk in the package "
               f"(renamed/removed?): {', '.join(s.unmatched_keys[:5])}{' …' if len(s.unmatched_keys) > 5 else ''}")
-    shutil.copy2(ZENODO_README_PATH, out_dir / "ZENODO_README.md")
     print(f"    wrote to {out_dir}")
 
 

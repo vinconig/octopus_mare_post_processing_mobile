@@ -12,9 +12,6 @@ source file's. An entry may carry:
 - "rename" — shipped name, if different from the source column.
 - "transform" — callable applied to the column before shipping (e.g.
   `to_local_timestamp`).
-
-What each shipped column means is documented by hand in
-release/ZENODO_README.md.
 """
 
 from datetime import timedelta, timezone

@@ -88,7 +88,7 @@ class CurationSummary:
 
 
 def _copy_all_but_walks(package_dir: Path, out_dir: Path) -> None:
-    """Copy everything in the package (metadata, README, fixed data, ...) except
+    """Copy everything in the package (metadata, fixed data, ...) except
     the two walk folders, which apply_curation writes itself."""
     walk_dirs = {(package_dir / MOBILE_SUBDIR).resolve(), (package_dir / EDGE_SUBDIR).resolve()}
 
@@ -110,7 +110,7 @@ def apply_curation(
     Reads `package_dir` (package_for_zenodo.py's output, which is never modified)
     and writes the curated deposit to `out_dir`:
 
-    * everything but the two walk folders is copied as is (metadata, README, ...);
+    * everything but the two walk folders is copied as is (metadata, ...);
     * a walk marked "discard" is left out;
     * a walk with a trim and/or cuts loses those rows, keeping every other row's
       recorded timestamp; if it then touches fewer than MIN_MATCHED_EDGES edges it
