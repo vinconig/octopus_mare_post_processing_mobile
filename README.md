@@ -4,7 +4,7 @@ Processing code for the mobile part of an environmental sensing campaign in Mar�
 
 The calibration of the environmental readings and the fixed data stream of the campaign are not part of this repository; they are processed elsewhere.
 
-The released dataset: [doi.org/10.5281/zenodo.23105404](https://doi.org/10.5281/zenodo.23105404).
+The released dataset is *Participatory pedestrian and fixed-site environmental sensing data from Complexo da Maré, Rio de Janeiro* (Jansen, Bastos Moroz, Schlüter, Mora, Ratti): [doi.org/10.5281/zenodo.23105404](https://doi.org/10.5281/zenodo.23105404).
 
 **The raw recordings are not available.** They contain locations that identify private addresses, so they cannot be shared, and the pipeline cannot be re-run from the start without them. What is public is the released dataset (the map-matched walks and per-edge aggregates) and this code. The code can be read and audited, its tests run without any data, and everything that was decided by hand (route endpoints, matching settings, release curation) is committed alongside it.
 

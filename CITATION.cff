@@ -14,3 +14,18 @@ authors:
     affiliation: "Massachusetts Institute of Technology; Technical University of Munich"
 repository-code: "https://github.com/vinconig/octopus_mare_post_processing_mobile"
 license: MIT
+references:
+  - type: dataset
+    title: "Participatory pedestrian and fixed-site environmental sensing data from Complexo da Maré, Rio de Janeiro"
+    authors:
+      - family-names: "Jansen"
+        given-names: "Vincent"
+      - family-names: "Bastos Moroz"
+        given-names: "Cassiano"
+      - family-names: "Schlüter"
+        given-names: "Antoine"
+      - family-names: "Mora"
+        given-names: "Simone"
+      - family-names: "Ratti"
+        given-names: "Carlo"
+    doi: "10.5281/zenodo.23105404"
