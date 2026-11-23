@@ -39,8 +39,8 @@ from gps_route_matcher.route import build_route_1d
 
 # Columns that are necessary earlier in the pipeline (cross-file dedup /
 # session-splitting for the ts_* trio; the segment_id derivation for dt_s)
-# but superseded or unread by the time a trip reaches the matched CSV — see
-# docs/matching_methodology.md. Dropped only here, at the final write:
+# but superseded or unread by the time a trip reaches the matched CSV. Dropped
+# only here, at the final write:
 # map_matching.py re-reads c_prepared from a separate process and re-derives
 # timestamp/timestamp_valid/timestamp_inferred from ts_clean/ts_valid/
 # ts_inferred if present, so those three must still be on disk in c_prepared.
