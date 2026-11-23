@@ -12,7 +12,6 @@ venv/
 # redistributed here, see README.md)
 data/
 output/
-routes/
 
 # Local-only
 .DS_Store
